@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * douyin_skill v3.0 — Browser-native API collection (anti-detection optimized)
+ * douyin_skill v3.2 — Playwright API Interceptor
  *
- * 核心改变：所有 API 调用在浏览器内通过 page.evaluate() 执行
- * 参考：MediaCrawler 的架构 - 保持浏览器打开，使用浏览器的真实网络栈
+ * 这是一个完全基于浏览器网络拦截的数据采集方案：
+ * 1. 启动 Playwright 浏览器（复用本地 Cookie）
+ * 2. 导航到目标创作者的主页
+ * 3. 监听网络响应，实时捕获并解析 `/aweme/v1/web/user/profile/other/` 和 `/aweme/v1/web/aweme/post/`
+ * 4. 模拟人工滚动页面，自动触发抖音官方前端的分页请求
+ * 5. 将抓取到的数据自动去重并导出为 summary.json, videos.json, videos.csv
  *
- * Usage:
- *   node scripts/collect.mjs --account <URL_OR_SEC_USER_ID> [options]
+ * 优势：
+ * - 100% 绕过 a_bogus / msToken 签名校验
+ * - 使用真实浏览器的 HTTP/2 握手与 TLS 特征，极难被风控拦截
+ * - 支持扫码登录与验证码登录，并且断线可重连，出现滑动验证码时可人工交互解决
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
@@ -37,7 +43,7 @@ function buildBrowserOptions() {
     acceptDownloads: true,
     channel: "chrome",
     headless: false,
-    viewport: { width: 1920, height: 1080 },
+    viewport: { width: 1280, height: 800 },
     locale: "zh-CN",
     timezoneId: "Asia/Shanghai",
     args: [
@@ -60,17 +66,73 @@ function extractSecUserId(account) {
   throw new Error("Could not extract sec_user_id from account.");
 }
 
-function hasDouyinLogin(cookies) {
-  const names = new Set(cookies.map((c) => c.name));
-  return names.has("sessionid") || names.has("sid_guard") || names.has("msToken");
+async function hasDouyinLogin(page, context) {
+  try {
+    const cookies = await context.cookies();
+    const cookieDict = {};
+    for (const c of cookies) {
+      cookieDict[c.name] = c.value;
+    }
+    
+    // Check key cookies
+    if (cookieDict.sessionid || cookieDict.sid_guard || cookieDict.LOGIN_STATUS === "1") {
+      return true;
+    }
+    
+    // Check localStorage
+    const hasLogin = await page.evaluate(() => window.localStorage.getItem("HasUserLogin"));
+    if (hasLogin === "1") {
+      return true;
+    }
+  } catch (e) {
+    // Ignore context or page detachment errors during load
+  }
+  return false;
 }
 
 async function waitForLogin(page, context, timeout = 600000) {
-  console.log("[Browser] Waiting for login... Please scan QR code.");
+  console.log("[Browser] Checking login status...");
+  if (await hasDouyinLogin(page, context)) {
+    console.log("[Browser] Login detected!");
+    return true;
+  }
+  
+  // If not logged in, wait 3 seconds for page JS to settle, then try to pop up the login dialog
+  await page.waitForTimeout(3000);
+  if (!(await hasDouyinLogin(page, context))) {
+    try {
+      const dialog = page.locator("xpath=//div[@id='login-panel-new']");
+      if (!(await dialog.isVisible())) {
+        console.log("[Browser] Triggering login dialog...");
+        const loginSelectors = [
+          "p:has-text('登录')",
+          "button:has-text('登录')",
+          "div:has-text('登录')",
+          "text=登录",
+          "xpath=//p[text()='登录']"
+        ];
+        for (const selector of loginSelectors) {
+          try {
+            const btn = page.locator(selector).first();
+            if (await btn.isVisible()) {
+              await btn.click();
+              console.log(`[Browser] Clicked login button with selector: ${selector}`);
+              break;
+            }
+          } catch (e) {
+            // Ignore individual selector errors
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[Browser] Failed to auto-trigger login popup: ${err.message}`);
+    }
+  }
+
+  console.log("[Browser] Please scan QR code in the browser window to login.");
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const cookies = await context.cookies();
-    if (hasDouyinLogin(cookies)) {
+    if (await hasDouyinLogin(page, context)) {
       console.log("[Browser] Login detected!");
       return true;
     }
@@ -79,185 +141,426 @@ async function waitForLogin(page, context, timeout = 600000) {
   throw new Error("Login timeout. Please scan QR code in the browser.");
 }
 
-// ── In-Browser API Collection ────────────────────────────────────────
+function toIso(ts) {
+  if (!ts) return "";
+  const ms = Number(ts) * 1000;
+  return new Date(ms + 8 * 3600 * 1000).toISOString().replace(".000Z", "+08:00");
+}
 
-async function collectInBrowser(page, secUserId, limit) {
-  console.log("[Collection] Starting in-browser API calls...");
+function formatDuration(seconds) {
+  if (!seconds) return "";
+  const s = Number(seconds);
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
 
-  // Load signing script content
-  const signScriptPath = join(__dirname, "adapters", "douyin-sign.js");
-  const signScript = readFileSync(signScriptPath, "utf8");
+// ── HTML Report Generator ─────────────────────────────────────────────
 
-  // Execute collection logic inside the browser (inject sign script inline)
-  const result = await page.evaluate(
-    async ({ secUserId, limit, signScript }) => {
-      // Inject signing script into browser context
-      eval(signScript);
-      // Helper: Generate a_bogus signature (uses injected douyin-sign.js)
-      function getABogus(params, userAgent) {
-        if (typeof sign_datail === "undefined") {
-          throw new Error("sign_datail not found. Make sure douyin-sign.js is loaded.");
-        }
-        return sign_datail(params, userAgent);
-      }
+function fmt(n) {
+  const num = Number(n) || 0;
+  if (num >= 100000000) return (num / 100000000).toFixed(1) + "亿";
+  if (num >= 10000) return (num / 10000).toFixed(1) + "万";
+  return num.toLocaleString("zh-CN");
+}
 
-      // Helper: Build query params
-      function buildParams(base) {
-        const ua = navigator.userAgent;
-        const common = {
-          device_platform: "webapp",
-          aid: "6383",
-          channel: "channel_pc_web",
-          version_code: "190600",
-          version_name: "19.6.0",
-          cookie_enabled: "true",
-          screen_width: String(screen.width),
-          screen_height: String(screen.height),
-          browser_language: navigator.language,
-          browser_platform: navigator.platform,
-          browser_name: "Chrome",
-          browser_version: "136.0.0.0",
-          browser_online: "true",
-          engine_name: "Blink",
-          engine_version: "136.0.0.0",
-          os_name: navigator.platform.includes("Win") ? "Windows" : "Mac OS",
-          os_version: "10",
-          cpu_core_num: String(navigator.hardwareConcurrency || 8),
-          device_memory: String(navigator.deviceMemory || 8),
-          platform: "PC",
-          downlink: "10",
-          effective_type: "4g",
-          round_trip_time: "50",
-          webid: Math.random().toString(36).slice(2, 21),
-        };
-        return { ...common, ...base };
-      }
+function generateHtmlReport(summary, videos, userInfo) {
+  const avatar = userInfo.avatar_larger?.url_list?.[0] || userInfo.avatar_medium?.url_list?.[0] || "";
+  const signature = userInfo.signature || "";
+  const fetchedAt = new Date(summary.fetchedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
 
-      // Helper: Fetch with a_bogus
-      async function fetchDouyin(endpoint, params) {
-        const allParams = buildParams(params);
-        const queryStr = Object.keys(allParams)
-          .sort()
-          .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(allParams[k]))}`)
-          .join("&");
+  const videoRows = videos.map((v, i) => {
+    const date = v.publishedAt ? v.publishedAt.slice(0, 10) : "—";
+    const title = String(v.title || "").replace(/</g, "&lt;").replace(/>/g, "&gt;") || `(无标题)`;
+    return `
+    <tr>
+      <td class="rank">${i + 1}</td>
+      <td class="title-cell"><a href="${v.url}" target="_blank" title="${title}">${title}</a></td>
+      <td>${date}</td>
+      <td>${v.duration || "—"}</td>
+      <td class="num">${fmt(v.likes)}</td>
+      <td class="num">${fmt(v.views)}</td>
+      <td class="num">${fmt(v.comments)}</td>
+      <td class="num">${fmt(v.shares)}</td>
+      <td class="num">${fmt(v.favorites)}</td>
+    </tr>`;
+  }).join("");
 
-        const aBogus = getABogus(queryStr, navigator.userAgent);
-        const url = `https://www.douyin.com${endpoint}?${queryStr}&a_bogus=${encodeURIComponent(aBogus)}`;
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${summary.name} — 抖音数据报告</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        const response = await fetch(url, {
-          headers: {
-            "User-Agent": navigator.userAgent,
-            Accept: "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-            Referer: `https://www.douyin.com/user/${secUserId}`,
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-          },
-        });
+    :root {
+      --bg: #0d0f14;
+      --surface: #161b25;
+      --surface2: #1e2535;
+      --border: #2a3246;
+      --accent: #fe2c55;
+      --accent2: #25f4ee;
+      --text: #e8eaf0;
+      --muted: #7a85a0;
+      --card-shadow: 0 4px 24px rgba(0,0,0,.45);
+    }
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+    body {
+      font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
 
-        const text = await response.text();
-        if (!text || text.trim() === "") {
-          throw new Error(`Empty response from Douyin API (status=${response.status})`);
-        }
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #0d0f14 0%, #161b25 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 32px 48px;
+    }
+    .header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+    .avatar {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      border: 3px solid var(--accent);
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--surface2);
+    }
+    .avatar-placeholder {
+      width: 88px; height: 88px;
+      border-radius: 50%;
+      border: 3px solid var(--accent);
+      background: linear-gradient(135deg, var(--accent), #ff6b35);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 36px; flex-shrink: 0;
+    }
+    .profile-info { flex: 1; }
+    .profile-name {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      margin-bottom: 6px;
+    }
+    .profile-sig {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 8px;
+      line-height: 1.5;
+      max-width: 600px;
+    }
+    .profile-url a {
+      color: var(--accent2);
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .profile-url a:hover { text-decoration: underline; }
+    .header-meta {
+      text-align: right;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    .platform-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--accent), #ff6b35);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
 
-        return JSON.parse(text);
-      }
+    /* ── Stats Cards ── */
+    .stats-grid {
+      max-width: 1200px;
+      margin: 32px auto;
+      padding: 0 48px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+      transition: transform .2s, border-color .2s;
+    }
+    .stat-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+    }
+    .stat-icon { font-size: 24px; margin-bottom: 4px; }
+    .stat-label { color: var(--muted); font-size: 13px; font-weight: 500; }
+    .stat-value { font-size: 32px; font-weight: 700; letter-spacing: -1px; }
+    .stat-sub { color: var(--muted); font-size: 12px; }
 
-      // Step 1: Fetch user profile
-      const profileData = await fetchDouyin("/aweme/v1/web/user/profile/other/", {
-        sec_user_id: secUserId,
-        publish_video_strategy_type: "2",
-        personal_center_strategy: "1",
-      });
+    /* ── Table Section ── */
+    .table-section {
+      max-width: 1200px;
+      margin: 0 auto 48px;
+      padding: 0 48px;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .search-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      width: 220px;
+      transition: border-color .2s;
+    }
+    .search-box:focus { border-color: var(--accent); }
+    .search-box::placeholder { color: var(--muted); }
 
-      const user = profileData.user || {};
-      const userModule = profileData.user_module || {};
-      const userInfo = userModule.user || user;
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead { background: var(--surface2); }
+    th {
+      padding: 14px 12px;
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th:hover { color: var(--text); }
+    th.sorted { color: var(--accent); }
+    th .sort-icon { margin-left: 4px; opacity: .5; }
+    th.sorted .sort-icon { opacity: 1; }
+    td {
+      padding: 12px 12px;
+      border-top: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:hover td { background: var(--surface2); }
+    .rank { color: var(--muted); font-size: 12px; width: 36px; text-align: center; }
+    .title-cell { max-width: 360px; }
+    .title-cell a {
+      color: var(--text);
+      text-decoration: none;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+    .title-cell a:hover { color: var(--accent); }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .hidden { display: none; }
 
-      // Step 2: Fetch videos
-      const rawVideos = [];
-      let maxCursor = "";
-      let hasMore = true;
-      let pageCount = 0;
-      const maxPages = limit ? Math.ceil(limit / 18) : 50;
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 24px;
+      border-top: 1px solid var(--border);
+    }
 
-      while (hasMore && pageCount < maxPages) {
-        const postData = await fetchDouyin("/aweme/v1/web/aweme/post/", {
-          sec_user_id: secUserId,
-          count: "18",
-          max_cursor: maxCursor,
-          locate_query: "false",
-          publish_video_strategy_type: "2",
-        });
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      .header, .stats-grid, .table-section { padding: 0 20px; }
+      .header { padding: 24px 20px; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .stat-value { font-size: 24px; }
+    }
+    @media (max-width: 600px) {
+      .header-inner { flex-wrap: wrap; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
 
-        const awemeList = postData.aweme_list || [];
-        rawVideos.push(...awemeList);
-        hasMore = postData.has_more === 1 || postData.has_more === true;
-        maxCursor = String(postData.max_cursor || "0");
-        pageCount += 1;
+<!-- Header -->
+<div class="header">
+  <div class="header-inner">
+    ${avatar
+      ? `<img class="avatar" src="${avatar}" alt="${summary.name}" onerror="this.style.display='none'" />`
+      : `<div class="avatar-placeholder">🎬</div>`
+    }
+    <div class="profile-info">
+      <div class="platform-badge">📱 DOUYIN</div>
+      <div class="profile-name">${summary.name}</div>
+      ${signature ? `<div class="profile-sig">${signature.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>` : ""}
+      <div class="profile-url"><a href="${summary.url}" target="_blank">${summary.url}</a></div>
+    </div>
+    <div class="header-meta">
+      <div>采集时间</div>
+      <div>${fetchedAt}</div>
+      <div style="margin-top:8px">采集视频</div>
+      <div style="color:var(--accent);font-weight:700;font-size:18px">${videos.length} / ${summary.videoCount}</div>
+    </div>
+  </div>
+</div>
 
-        if (limit && rawVideos.length >= limit) break;
+<!-- Stats -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-icon">👥</div>
+    <div class="stat-label">粉丝数</div>
+    <div class="stat-value">${fmt(summary.followers)}</div>
+    <div class="stat-sub">${Number(summary.followers).toLocaleString("zh-CN")} 人</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">🎬</div>
+    <div class="stat-label">视频总数</div>
+    <div class="stat-value">${summary.videoCount}</div>
+    <div class="stat-sub">已采集 ${videos.length} 个</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">❤️</div>
+    <div class="stat-label">获赞总数</div>
+    <div class="stat-value">${fmt(summary.totalLikes)}</div>
+    <div class="stat-sub">${Number(summary.totalLikes).toLocaleString("zh-CN")} 次</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">💬</div>
+    <div class="stat-label">评论总数</div>
+    <div class="stat-value">${fmt(summary.totalComments)}</div>
+    <div class="stat-sub">已采集视频合计</div>
+  </div>
+</div>
 
-        // Random delay between requests (anti rate-limiting)
-        const baseDelay = 3000;
-        const jitter = Math.random() * 2000; // 0-2秒抖动
-        await new Promise((resolve) => setTimeout(resolve, baseDelay + jitter));
-      }
+<!-- Video Table -->
+<div class="table-section">
+  <div class="section-header">
+    <div class="section-title">📋 视频列表（共 ${videos.length} 条）</div>
+    <input class="search-box" id="searchInput" type="text" placeholder="🔍 搜索标题…" oninput="filterTable()" />
+  </div>
+  <div class="table-wrap">
+    <table id="videoTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th onclick="sortTable(1)">标题 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(2)">发布日期 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(3)">时长 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(4)" class="num">点赞 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(5)" class="num">播放 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(6)" class="num">评论 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(7)" class="num">分享 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(8)" class="num">收藏 <span class="sort-icon">⇅</span></th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        ${videoRows}
+      </tbody>
+    </table>
+  </div>
+</div>
 
-      // Step 3: Deduplicate and format
-      const seen = new Set();
-      const videos = rawVideos
-        .filter((video) => {
-          const key = String(video.aweme_id);
-          if (!key || seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .slice(0, limit || undefined)
-        .map((video) => {
-          const stats = video.statistics || {};
-          const duration = video.duration ? `${String(Math.floor(video.duration / 60000)).padStart(2, "0")}:${String(Math.floor((video.duration % 60000) / 1000)).padStart(2, "0")}` : "";
-          const publishedAt = video.create_time ? new Date(Number(video.create_time) * 1000).toISOString() : "";
-          return {
-            id: String(video.aweme_id),
-            title: video.desc || "",
-            url: `https://www.douyin.com/video/${video.aweme_id}`,
-            publishedAt,
-            duration,
-            likes: stats.digg_count ?? 0,
-            views: stats.play_count ?? 0,
-            comments: stats.comment_count ?? 0,
-            shares: stats.share_count ?? 0,
-            favorites: stats.collect_count ?? 0,
-            coins: 0,
-          };
-        });
+<div class="footer">douyin_skill v3.2 &nbsp;·&nbsp; 采集时间：${fetchedAt}</div>
 
-      return {
-        account: {
-          platform: "douyin",
-          id: secUserId,
-          url: `https://www.douyin.com/user/${secUserId}`,
-          name: userInfo.nickname || "",
-          followers: userInfo.follower_count ?? userInfo.mplatform_followers_count ?? 0,
-          videoCount: userInfo.aweme_count ?? videos.length,
-          totalLikes: userInfo.total_favorited ?? videos.reduce((sum, v) => sum + v.likes, 0),
-          totalViews: videos.reduce((sum, v) => sum + v.views, 0),
-          totalComments: videos.reduce((sum, v) => sum + v.comments, 0),
-          fetchedAt: new Date().toISOString(),
-        },
-        videos,
-      };
-    },
-    { secUserId, limit, signScript }
-  );
+<script>
+  // Search
+  function filterTable() {
+    const q = document.getElementById('searchInput').value.toLowerCase();
+    document.querySelectorAll('#tableBody tr').forEach(row => {
+      row.classList.toggle('hidden', !row.cells[1].textContent.toLowerCase().includes(q));
+    });
+  }
 
-  return result;
+  // Sort
+  let sortCol = -1, sortAsc = true;
+  const rawData = ${JSON.stringify(videos)};
+
+  function fmt(n) {
+    return Number(n) || 0;
+  }
+
+  function sortTable(col) {
+    const headers = document.querySelectorAll('thead th');
+    headers.forEach((th, i) => {
+      th.classList.toggle('sorted', i === col);
+    });
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = false; }
+
+    const colKeys = [null, 'title', 'publishedAt', 'duration', 'likes', 'views', 'comments', 'shares', 'favorites'];
+    const key = colKeys[col];
+    const sorted = [...rawData].sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (typeof av === 'number') return sortAsc ? av - bv : bv - av;
+      av = String(av || ''); bv = String(bv || '');
+      return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+
+    const fmtNum = (n) => {
+      const num = Number(n) || 0;
+      if (num >= 100000000) return (num/100000000).toFixed(1)+'亿';
+      if (num >= 10000) return (num/10000).toFixed(1)+'万';
+      return num.toLocaleString('zh-CN');
+    };
+
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = sorted.map((v, i) => {
+      const date = v.publishedAt ? v.publishedAt.slice(0,10) : '—';
+      const title = String(v.title||'').replace(/</g,'&lt;').replace(/>/g,'&gt;') || '(无标题)';
+      return \`<tr>
+        <td class="rank">\${i+1}</td>
+        <td class="title-cell"><a href="\${v.url}" target="_blank" title="\${title}">\${title}</a></td>
+        <td>\${date}</td>
+        <td>\${v.duration||'—'}</td>
+        <td class="num">\${fmtNum(v.likes)}</td>
+        <td class="num">\${fmtNum(v.views)}</td>
+        <td class="num">\${fmtNum(v.comments)}</td>
+        <td class="num">\${fmtNum(v.shares)}</td>
+        <td class="num">\${fmtNum(v.favorites)}</td>
+      </tr>\`;
+    }).join('');
+  }
+</script>
+</body>
+</html>`;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────
@@ -285,6 +588,7 @@ if (!args.account) {
   console.error("  --account   Douyin profile URL or sec_user_id (required)");
   console.error("  --profile   Browser profile directory (default: ./private/profiles/douyin)");
   console.error("  --limit     Max videos to fetch (default: 200)");
+  console.error("  --delay     Request interval/scroll delay in ms (default: 2000)");
   console.error("  --out       Output directory (default: ./outputs/<account_id>)");
   process.exit(1);
 }
@@ -293,11 +597,12 @@ if (!args.account) {
   const secUserId = extractSecUserId(args.account);
   const profileDir = args.profile || "./private/profiles/douyin";
   const limit = args.limit ? parseInt(args.limit, 10) : 200;
+  const delay = args.delay ? parseInt(args.delay, 10) : 2000;
   const outDir = args.out || join("./outputs", secUserId);
 
-  console.log(`[douyin_skill v3.0] Collecting account: ${secUserId}`);
-  console.log(`[douyin_skill v3.0] Mode: Browser-native API calls`);
-  console.log(`[douyin_skill v3.0] limit=${limit}`);
+  console.log(`[douyin_skill v3.2] Collecting account: ${secUserId}`);
+  console.log(`[douyin_skill v3.2] Mode: Playwright API Interceptor`);
+  console.log(`[douyin_skill v3.2] limit=${limit}, delay=${delay}ms`);
 
   await mkdir(profileDir, { recursive: true });
 
@@ -317,35 +622,211 @@ if (!args.account) {
 
     const page = context.pages()[0] || (await context.newPage());
 
-    // Navigate and wait for login
-    await page.goto(`https://www.douyin.com/user/${secUserId}`, { waitUntil: "domcontentloaded" });
+    // ── Setup Interceptors ──────────────────────────────────────────────
+    let capturedProfile = null;
+    const rawVideos = [];
+    let hasMore = true;
+    let newResponseReceived = false;
+
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (url.includes('/aweme/v1/web/user/profile/other/')) {
+        try {
+          const json = await response.json();
+          capturedProfile = json;
+          console.log(`[Capture] Profile details captured for: ${capturedProfile.user?.nickname || capturedProfile.user_module?.user?.nickname || 'Creator'}`);
+        } catch (err) {
+          console.warn(`[Capture] Failed to parse profile JSON: ${err.message}`);
+        }
+      }
+      if (url.includes('/aweme/v1/web/aweme/post/')) {
+        console.log(`[Response] Post API Status: ${response.status()}`);
+        try {
+          const text = await response.text();
+          if (!text) {
+            console.warn("[Capture] Post API returned empty response body.");
+            return;
+          }
+          const json = JSON.parse(text);
+          const list = json.aweme_list || [];
+          rawVideos.push(...list);
+          hasMore = json.has_more === 1 || json.has_more === true;
+          newResponseReceived = true;
+          console.log(`[Capture] Captured ${list.length} videos (Total: ${rawVideos.length}, hasMore: ${hasMore})`);
+        } catch (err) {
+          console.warn(`[Capture] Failed to parse post JSON: ${err.message}`);
+        }
+      }
+    });
+
+    // Navigate to homepage first to check/wait for login
+    await page.goto("https://www.douyin.com/", { waitUntil: "domcontentloaded" });
     await waitForLogin(page, context);
 
-    // Collect data using in-browser API calls
-    const result = await collectInBrowser(page, secUserId, limit);
+    // Navigate to target user profile page
+    console.log(`[Browser] Navigating to user page: https://www.douyin.com/user/${secUserId}`);
+    await page.goto(`https://www.douyin.com/user/${secUserId}`, { waitUntil: "domcontentloaded" });
+
+    // Wait for the first page data to load naturally
+    let waitCount = 0;
+    while ((!capturedProfile || rawVideos.length === 0) && waitCount < 15) {
+      await page.waitForTimeout(1000);
+      waitCount++;
+    }
+
+    if (!capturedProfile || rawVideos.length === 0) {
+      console.warn("[Adapter] First page of data was not captured naturally. Trying to reload...");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      waitCount = 0;
+      while ((!capturedProfile || rawVideos.length === 0) && waitCount < 15) {
+        await page.waitForTimeout(1000);
+        waitCount++;
+      }
+    }
+
+    if (!capturedProfile) {
+      throw new Error("Failed to capture user profile from network responses. Please make sure you are logged in and page loads correctly.");
+    }
+
+    // Wait an additional 12 seconds for secondary pages (like Page 2 & 3) to naturally load and fully render cards
+    console.log("[Browser] Waiting 12 seconds for natural loads to stabilize page layout...");
+    await page.waitForTimeout(12000);
+    console.log(`[Browser] Layout stabilized. Initial videos captured: ${rawVideos.length}`);
+
+    // ── Scroll Loop to Trigger Pagination ────────────────────────────────
+    console.log("[Browser] Starting scroll loop to fetch videos...");
+    
+    // Move mouse to center of page (video list area) to activate IntersectionObserver triggers
+    const viewportSize = page.viewportSize();
+    const centerX = viewportSize ? viewportSize.width / 2 : 640;
+    const centerY = viewportSize ? viewportSize.height / 2 : 400;
+    await page.mouse.move(centerX, centerY);
+
+    let noNewDataRounds = 0;
+    const MAX_NO_DATA_ROUNDS = 8; // Give up after 8 consecutive rounds with no new data
+
+    while (hasMore && rawVideos.length < limit && noNewDataRounds < MAX_NO_DATA_ROUNDS) {
+      newResponseReceived = false;
+
+      // Use mouse.wheel() to simulate real user scroll — this triggers IntersectionObserver
+      // in scroll containers that window.scrollTo cannot reach
+      const scrollSteps = 6;
+      for (let i = 0; i < scrollSteps; i++) {
+        await page.mouse.wheel(0, 600);
+        await page.waitForTimeout(120);
+      }
+
+      // Wait up to (delay) ms for a new API response
+      const waitStart = Date.now();
+      while (!newResponseReceived && (Date.now() - waitStart) < delay) {
+        await page.waitForTimeout(300);
+      }
+
+      if (newResponseReceived) {
+        noNewDataRounds = 0;
+        console.log(`[Browser] Scroll triggered new data. Total videos: ${rawVideos.length}`);
+        // Give extra time for the new batch to finish rendering before next scroll
+        await page.waitForTimeout(800);
+      } else {
+        noNewDataRounds++;
+        console.log(`[Browser] No new data after scroll (round ${noNewDataRounds}/${MAX_NO_DATA_ROUNDS}). Trying jitter...`);
+        // Jitter: scroll up a bit then back down to re-trigger lazy load
+        for (let i = 0; i < 3; i++) {
+          await page.mouse.wheel(0, -300);
+          await page.waitForTimeout(150);
+        }
+        await page.waitForTimeout(500);
+        for (let i = 0; i < 4; i++) {
+          await page.mouse.wheel(0, 800);
+          await page.waitForTimeout(150);
+        }
+        await page.waitForTimeout(1000);
+      }
+    }
+
+    if (!hasMore) {
+      console.log("[Browser] Server reported hasMore=false. All videos fetched.");
+    } else if (rawVideos.length >= limit) {
+      console.log(`[Browser] Reached limit of ${limit} videos.`);
+    } else {
+      console.log(`[Browser] No new data after ${MAX_NO_DATA_ROUNDS} rounds. Stopping scroll.`);
+    }
+
+    console.log(`[Browser] Finished fetching. Deduplicating data...`);
+
+    // ── Deduplicate and limit ───────────────────────────────────────────
+    const seen = new Set();
+    const uniqueVideos = rawVideos
+      .filter((video) => {
+        const key = String(video.aweme_id);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, limit);
+
+    // Map to final schema
+    const videos = uniqueVideos.map((video) => {
+      const stats = video.statistics || {};
+      return {
+        id: String(video.aweme_id),
+        title: video.desc || "",
+        url: `https://www.douyin.com/video/${video.aweme_id}`,
+        publishedAt: toIso(video.create_time),
+        duration: formatDuration(video.duration),
+        likes: stats.digg_count ?? 0,
+        views: stats.play_count ?? 0,
+        comments: stats.comment_count ?? 0,
+        shares: stats.share_count ?? 0,
+        favorites: stats.collect_count ?? 0,
+        coins: 0,
+      };
+    });
+
+    const user = capturedProfile.user || {};
+    const userModule = capturedProfile.user_module || {};
+    const userInfo = userModule.user || user;
+
+    const summary = {
+      platform: "douyin",
+      id: secUserId,
+      url: `https://www.douyin.com/user/${secUserId}`,
+      name: userInfo.nickname || "",
+      followers: userInfo.follower_count ?? userInfo.mplatform_followers_count ?? 0,
+      videoCount: userInfo.aweme_count ?? videos.length,
+      totalLikes: userInfo.total_favorited ?? videos.reduce((sum, v) => sum + v.likes, 0),
+      totalViews: videos.reduce((sum, v) => sum + v.views, 0),
+      totalComments: videos.reduce((sum, v) => sum + v.comments, 0),
+      fetchedAt: new Date().toISOString(),
+    };
 
     // Save results
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "summary.json"), JSON.stringify(result.account, null, 2), "utf8");
-    writeFileSync(join(outDir, "videos.json"), JSON.stringify(result.videos, null, 2), "utf8");
+    writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
+    writeFileSync(join(outDir, "videos.json"), JSON.stringify(videos, null, 2), "utf8");
 
     // CSV
     const csvHeader = "id,title,url,publishedAt,duration,likes,views,comments,shares,favorites,coins";
-    const csvRows = result.videos.map((v) =>
+    const csvRows = videos.map((v) =>
       [v.id, `"${String(v.title).replace(/"/g, '""')}"`, v.url, v.publishedAt, v.duration, v.likes, v.views, v.comments, v.shares, v.favorites, v.coins].join(",")
     );
-    writeFileSync(join(outDir, "videos.csv"), "﻿" + [csvHeader, ...csvRows].join("\n"), "utf8");
+    writeFileSync(join(outDir, "videos.csv"), "\ufeff" + [csvHeader, ...csvRows].join("\n"), "utf8");
+
+    // HTML Report
+    const htmlReport = generateHtmlReport(summary, videos, userInfo);
+    writeFileSync(join(outDir, "report.html"), htmlReport, "utf8");
 
     // Summary
-    console.log("\n[douyin_skill v3.0] Done!");
-    console.log(`  Account : ${result.account.name} (${result.account.id})`);
-    console.log(`  Followers: ${result.account.followers.toLocaleString()}`);
-    console.log(`  Videos  : ${result.videos.length} fetched (total: ${result.account.videoCount})`);
-    console.log(`  Likes   : ${result.account.totalLikes.toLocaleString()}`);
-    console.log(`  Views   : ${result.account.totalViews.toLocaleString()}`);
+    console.log("\n[douyin_skill v3.2] Done!");
+    console.log(`  Account : ${summary.name} (${summary.id})`);
+    console.log(`  Followers: ${summary.followers.toLocaleString()}`);
+    console.log(`  Videos  : ${videos.length} fetched (total: ${summary.videoCount})`);
+    console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
+    console.log(`  Views   : ${summary.totalViews.toLocaleString()}`);
     console.log(`  Output  : ${outDir}`);
+
   } catch (err) {
-    console.error(`[douyin_skill v3.0] Error: ${err.message}`);
+    console.error(`[douyin_skill v3.2] Error: ${err.message}`);
     process.exit(1);
   } finally {
     await context.close();

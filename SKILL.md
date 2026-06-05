@@ -1,24 +1,21 @@
 ---
 name: douyin_skill
-description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, video list with likes/views/comments/shares, JSON/CSV export. Supports browser login (scan QR code) or manual cookie input.
+description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, video list with likes/views/comments/shares. Exports summary.json, videos.json, videos.csv, and an HTML report. Pure browser-network interception, no a_bogus signing.
 ---
 
-# Douyin Skill
+# Douyin Skill (v3.2)
 
-从抖音采集创作者账号数据——粉丝数、视频列表、点赞/播放/评论/分享指标，导出 `summary.json`、`videos.json`、`videos.csv`。
+从抖音采集创作者账号数据——粉丝数、视频列表、点赞/播放/评论/分享指标，导出 `summary.json`、`videos.json`、`videos.csv` 与一个可分享的 `report.html`。
 
 ## 安装依赖
 
 ```bash
 cd douyin_skill
 npm install
+npx playwright install chromium   # 首次必须，约 200MB
 ```
 
-首次运行后，Playwright 会自动下载 Chromium 浏览器（约 200MB）。
-
 ## 使用方法
-
-### 方法 1: 浏览器扫码登录（推荐）
 
 ```bash
 node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
@@ -26,37 +23,25 @@ node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 **流程：**
 1. 自动打开 Chrome 浏览器
-2. 跳转到抖音登录页
-3. 使用抖音 APP 扫码登录（或手机号登录）
-4. 登录成功后，脚本自动检测 Cookie 并开始采集
-5. Cookie 保存到 `./private/profiles/douyin/`，下次运行自动复用
-
-**优点：**
-- 无需手动复制 Cookie
-- 登录状态持久化，下次直接采集
-- 通过率高，不易被风控
-
-### 方法 2: 手动 Cookie（不推荐）
-
-```bash
-node scripts/collect.mjs \
-  --account "https://www.douyin.com/user/MS4wLjABAAAA..." \
-  --cookie "msToken=xxx; ttwid=xxx; sessionid=xxx; ..." \
-  --no-browser
-```
+2. 跳转到抖音首页，检测登录态（Cookie + localStorage）
+3. 未登录时自动点击"登录"按钮弹出扫码框，请使用抖音 APP 扫码
+4. 登录成功后跳转到目标创作者主页
+5. 脚本通过网络响应拦截器实时捕获 `/aweme/v1/web/user/profile/other/` 与 `/aweme/v1/web/aweme/post/`
+6. 模拟真人滚动触发分页（mouse.wheel + jitter scroll），自动去重
+7. 写入 `./outputs/<sec_user_id>/`：`summary.json` / `videos.json` / `videos.csv` / `report.html`
+8. Cookie 保存到 `./private/profiles/douyin/`，下次直接复用免扫码
 
 ## 参数说明
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--account` | 抖音主页 URL 或 sec_user_id（必填） | — |
-| `--browser` | 启用浏览器登录模式 | `true` |
-| `--no-browser` | 禁用浏览器，使用手动 Cookie | `false` |
-| `--cookie` | 浏览器 Cookie 字符串（手动模式） | 空 |
-| `--profile` | 浏览器配置文件目录 | `./private/profiles/douyin` |
-| `--limit` | 最多采集视频数量 | 200 |
-| `--delay` | 请求间隔（毫秒） | 5000 |
+| `--account` | 抖音主页 URL 或 `sec_user_id`（必填） | — |
+| `--profile` | 浏览器配置文件目录（持久化登录态） | `./private/profiles/douyin` |
+| `--limit` | 最多采集视频数量 | `200` |
+| `--delay` | 滚动间隔等待新响应的最大毫秒数 | `2000` |
 | `--out` | 输出目录 | `./outputs/<sec_user_id>` |
+
+> v3.2 已移除 `--cookie` / `--no-browser` / `--browser` 旗标。采集必须通过浏览器拦截器进行——这是它能稳定绕过风控的根本原因。
 
 ## Account 格式
 
@@ -80,26 +65,20 @@ MS4wLjABAAAA...
    node scripts/collect.mjs --account "抖音用户URL"
    ```
 
-2. **浏览器自动打开**
-   - 跳转到抖音页面
-   - 如果未登录，显示扫码页面
+2. **浏览器自动打开**，访问抖音首页
 
-3. **扫码登录**
-   - 打开抖音 APP
-   - 扫描浏览器中的二维码
-   - 或使用手机号验证码登录
+3. **自动检测登录态**
+   - 检查 cookies（`sessionid` / `sid_guard` / `LOGIN_STATUS=1`）
+   - 检查 `localStorage.HasUserLogin === "1"`
+   - 三者任一命中即认为已登录
 
-4. **自动检测登录**
-   - 脚本检测到 Cookie（sessionid, msToken）
-   - 提示 "Login detected! Cookies saved to profile."
+4. **若未登录**：自动点击页面上的"登录"按钮弹出二维码
 
-5. **开始采集**
-   - 自动使用登录状态采集数据
-   - Cookie 保存到本地配置文件
+5. **扫码登录**（最长等待 10 分钟）：使用抖音 APP 扫描浏览器中的二维码
 
-6. **下次运行**
-   - 直接复用保存的登录状态
-   - 无需重复扫码
+6. **自动进入采集**：检测到登录态后，导航到目标主页 → 启动滚动循环
+
+7. **下次运行**：复用持久化配置文件，免扫码
 
 ## 输出格式
 
@@ -120,13 +99,15 @@ MS4wLjABAAAA...
 }
 ```
 
+> 注意：`totalViews` 来自已采集视频的 `play_count` 之和；抖音对部分账号会返回 `play_count=0`（隐藏播放量），此时该字段为 0 属正常现象。
+
 ### videos.json / videos.csv
 
 每条视频包含：
 
 | 字段 | 说明 |
 |------|------|
-| `id` | 视频 aweme_id |
+| `id` | 视频 `aweme_id` |
 | `title` | 视频描述/标题 |
 | `url` | 视频页面 URL |
 | `publishedAt` | 发布时间（+08:00） |
@@ -136,101 +117,101 @@ MS4wLjABAAAA...
 | `comments` | 评论数 |
 | `shares` | 分享数 |
 | `favorites` | 收藏数 |
-| `coins` | 0（抖音无此字段） |
+| `coins` | 0（抖音无此字段，保留用于跨平台 schema 兼容） |
+
+### report.html
+
+自带样式的暗色单页报告：头像、签名、统计卡片、可排序/可搜索的视频表格。直接双击在浏览器打开即可分享给非技术用户。
 
 ## 技术实现
 
-- **浏览器自动化**: Playwright + playwright-extra（隐身模式）
-- **签名算法**: `a_bogus` 参数通过 `douyin-sign.js` 生成（RC4 + SM3 国密哈希）
-- **接口**:
-  - 用户信息: `/aweme/v1/web/user/profile/other/`
-  - 视频列表: `/aweme/v1/web/aweme/post/`（分页，每页 18 条）
-- **失败重试**: 指数退避，最多 5 次
-- **UA 轮换**: 10 个 Chrome/Firefox/Safari UA 随机选取
-- **Cookie 持久化**: 浏览器配置文件自动保存，下次复用
+- **浏览器自动化**：Playwright + playwright-extra（Stealth 隐身模式防爬检测）
+- **采集机制**：API Interceptor —— 通过 `page.on('response')` 监听并解析浏览器原生发出的 API 响应，**完全绕过本地 a_bogus / msToken 签名**，避免签名失效与风控拦截
+- **数据滚动**：`page.mouse.wheel()` 模拟真人滚轮 + 失败回合的 jitter scroll（上滚回弹再下滚）触发懒加载
+- **登录持久化**：浏览器配置文件 + LocalStorage 特征自动保存，下次免扫码登录
+- **终止条件**：服务器 `has_more=false` / 达到 `--limit` / 连续 8 轮滚动无新响应
+
+## 斜杠命令（Claude Code）
+
+项目已注册 `/douyin_skill` 自定义命令（见 `.claude/commands/douyin_skill.md`）：
+
+```
+/douyin_skill MS4wLjABAAAA...                       # 默认 200 条
+/douyin_skill MS4wLjABAAAA... --limit 50            # 限量 50 条
+/douyin_skill MS4wLjABAAAA... --delay 5000 --limit 100
+```
+
+Claude 会自动 `cd` 到本项目运行 `node scripts/collect.mjs`，并在完成后总结结果。
 
 ## 常见问题
 
 ### 1. 首次运行提示缺少依赖
 
 ```
-Error: Stealth mode requires playwright-extra and puppeteer-extra-plugin-stealth
+Cannot find package 'playwright-extra'
 ```
 
-**解决**: 运行 `npm install` 安装依赖
-
-### 2. 浏览器无法打开
-
-```
-Error: Browser auth requires Playwright
-```
-
-**解决**: 
+**解决**：
 ```bash
 npm install
 npx playwright install chromium
 ```
 
-### 3. 扫码后没有反应
+### 2. 报"Failed to capture user profile from network responses"
 
-- 等待最多 10 分钟自动检测登录
-- 检查浏览器是否真的登录成功（刷新页面看是否需要重新登录）
-- 如果一直卡住，关闭浏览器重试
-
-### 4. HTTP 412 / 403（风控拦截）
-
-即使浏览器登录，抖音也可能风控。解决方案：
-- 增加 `--delay 10000`（10秒间隔）
-- 减少 `--limit 50`（少采集一些）
-- 等待几分钟后重试
-
-### 5. 登录状态失效
-
-Cookie 过期后，脚本会提示重新登录：
+通常是**登录态失效**或目标账号已被限制。解决：
 ```bash
-# 清除旧登录，重新扫码
 rm -rf ./private/profiles/douyin
 node scripts/collect.mjs --account "..."
 ```
+重新扫码登录。
 
-### 6. 不想用浏览器，只想用 Cookie
+### 3. 滚动很久但视频数量不增长
 
+抖音对低频账号或新号偶发返回 `has_more=false`。脚本会在**连续 8 轮无新数据**后自动停止，是预期行为。检查 `summary.videoCount` 与 `videos.length` 是否一致：
+- 一致 → 该账号视频已采全
+- 不一致 → 风控介入，建议增加 `--delay 5000` 或更换网络环境重试
+
+### 4. 滑动验证码 / 拼图
+
+页面出现验证码时，**人工在浏览器里完成验证**，脚本会继续。不要关闭窗口。
+
+### 5. 多账号管理
+
+每个抖音账号用独立配置目录：
 ```bash
-node scripts/collect.mjs \
-  --account "..." \
-  --cookie "你的Cookie" \
-  --no-browser
+node scripts/collect.mjs --account "账号1URL" --profile ./private/profiles/account1
+node scripts/collect.mjs --account "账号2URL" --profile ./private/profiles/account2
 ```
 
-获取 Cookie 方法见 `EXAMPLES.md`。
+### 6. 浏览器一闪而过 / 立刻报错
 
-## 优势对比
-
-| 方式 | 优点 | 缺点 |
-|------|------|------|
-| 浏览器登录 | Cookie 自动管理<br>通过率高<br>无需手动复制 | 需要安装依赖<br>首次扫码 |
-| 手动 Cookie | 不需要依赖<br>快速测试 | Cookie 容易过期<br>风控拦截率高<br>需要手动更新 |
+确认本机已安装 Chrome（脚本配置 `channel: "chrome"`）。如果只有 Chromium：删除 `buildBrowserOptions()` 中 `channel: "chrome"` 一行，或安装 Chrome 浏览器。
 
 ## 文件说明
 
 ```
 douyin_skill/
 ├── SKILL.md                          # 本文档
+├── README.md                         # 英文项目说明
 ├── EXAMPLES.md                       # 使用示例
-├── package.json                      # 依赖配置
-├── private/
-│   └── profiles/
-│       └── douyin/                   # 浏览器登录状态（自动生成）
-├── outputs/                          # 采集结果（自动生成）
+├── CHANGELOG.md                      # 版本历史
+├── package.json
+├── .claude/
+│   └── commands/
+│       └── douyin_skill.md           # /douyin_skill 斜杠命令定义
+├── private/profiles/douyin/          # 浏览器登录态（自动生成，git 忽略）
+├── outputs/                          # 采集结果（自动生成，git 忽略）
 └── scripts/
-    ├── collect.mjs                   # CLI 入口（含浏览器登录）
+    ├── collect.mjs                   # v3.2 主入口（拦截器 + HTML 报告）
     └── adapters/
-        ├── douyin.mjs                # 主采集逻辑
-        └── douyin-sign.js            # a_bogus 签名库
+        ├── stealth.min.js            # 反检测注入脚本
+        ├── douyin.mjs                # 旧版 HTTP 适配器（v2.x，已不被 collect.mjs 引用，保留供参考）
+        └── douyin-sign.js            # a_bogus 签名库（v1.x，已不被使用）
 ```
 
 ## 依赖
 
-- `playwright` (^1.60.0) - 浏览器自动化
-- `playwright-extra` (^4.3.6) - 隐身插件支持
-- `puppeteer-extra-plugin-stealth` (^2.11.2) - 反检测
+- `playwright` (^1.60.0)
+- `playwright-extra` (^4.3.6)
+- `puppeteer-extra-plugin-stealth` (^2.11.2)

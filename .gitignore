@@ -26,6 +26,9 @@ desktop.ini
 *.swo
 *~
 
+# Claude Code local settings (machine-specific allowlist, may leak local paths and target IDs)
+.claude/settings.local.json
+
 # Logs
 *.log
 npm-debug.log*

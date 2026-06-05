@@ -1,76 +1,67 @@
 # Douyin Skill
 
-Standalone Douyin (抖音) creator account data collector with **browser login support** (scan QR code).
+Standalone Douyin (抖音) creator account data collector. **v3.2 uses Playwright network-response interception** — no a_bogus signing, no manual cookie input.
 
 ## Features
 
-- 🎯 **Browser Login** - Scan QR code in Chrome, cookies auto-saved
-- 📊 **Complete Metrics** - Followers, likes, views, comments, shares
-- 💾 **Multiple Formats** - JSON, CSV (Excel-ready)
-- 🔄 **Persistent Login** - Login once, reuse forever
-- 🛡️ **Anti-Detection** - Playwright stealth mode
+- 🕸️ **Browser-Native Interception** — captures the JSON Douyin's own frontend already requests; zero local signing
+- 🔐 **One-Time QR Login** — login state persisted to `./private/profiles/douyin/`, reused on subsequent runs
+- 📊 **Complete Metrics** — followers, total likes, video-level likes/views/comments/shares/favorites
+- 📁 **Four Output Formats** — `summary.json`, `videos.json`, `videos.csv` (Excel-ready), and a self-contained dark-theme `report.html`
+- 🛡️ **Anti-Detection** — playwright-extra stealth + injected `stealth.min.js`, real Chrome TLS/HTTP fingerprint
+- 🎯 **Human-Like Scroll** — `mouse.wheel` + jitter to trigger lazy-load reliably
 
 ## Installation
 
 ```bash
 npm install
+npx playwright install chromium
 ```
 
-This installs Playwright and downloads Chromium (~200MB).
+(~200 MB Chromium download on first run.)
 
 ## Quick Start
-
-### Browser Login (Recommended)
 
 ```bash
 node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
 **What happens:**
-1. Chrome opens automatically
-2. Douyin login page appears
-3. Scan QR code with Douyin app
-4. Script detects login and starts collection
-5. Cookies saved to `./private/profiles/douyin/`
-6. Next time: no login needed!
-
-### Manual Cookie (Fallback)
-
-```bash
-node scripts/collect.mjs \
-  --account "MS4wLjABAAAA..." \
-  --cookie "msToken=xxx; sessionid=xxx; ..." \
-  --no-browser
-```
+1. Chrome opens, navigates to douyin.com
+2. Login state is detected from cookies (`sessionid` / `sid_guard` / `LOGIN_STATUS`) and `localStorage.HasUserLogin`
+3. If not logged in: the script auto-clicks the "登录" button → scan QR with the Douyin app
+4. Navigates to the target creator page
+5. Network interceptor captures `/aweme/v1/web/user/profile/other/` (profile) and `/aweme/v1/web/aweme/post/` (paginated videos)
+6. Mouse-wheel scrolling triggers pagination until `has_more=false`, `--limit` is reached, or 8 consecutive no-data rounds
+7. Outputs dropped into `./outputs/<sec_user_id>/`
 
 ## Usage
 
 ```bash
-# Browser login (default)
-node scripts/collect.mjs --account <URL_OR_ID>
+# Basic
+node scripts/collect.mjs --account <URL_OR_SEC_USER_ID>
 
-# Custom limit and delay
-node scripts/collect.mjs --account <URL> --limit 50 --delay 10000
+# Limit videos and adjust scroll-wait delay
+node scripts/collect.mjs --account <URL> --limit 50 --delay 5000
 
 # Custom output directory
 node scripts/collect.mjs --account <URL> --out ./data/creator_20260605
 
-# Manual cookie mode (no browser)
-node scripts/collect.mjs --account <URL> --cookie "..." --no-browser
+# Isolate a second account in a separate browser profile
+node scripts/collect.mjs --account <URL2> --profile ./private/profiles/account2
 ```
 
 ## Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--account` | Douyin profile URL or sec_user_id (**required**) | - |
-| `--browser` | Enable browser login | `true` |
-| `--no-browser` | Disable browser, use manual cookie | `false` |
-| `--cookie` | Cookie header (manual mode) | - |
-| `--profile` | Browser profile directory | `./private/profiles/douyin` |
+| `--account` | Douyin profile URL or `sec_user_id` (**required**) | — |
+| `--profile` | Browser profile dir (persists login) | `./private/profiles/douyin` |
 | `--limit` | Max videos to fetch | `200` |
-| `--delay` | Request interval (ms) | `5000` |
-| `--out` | Output directory | `./outputs/<id>` |
+| `--delay` | Max ms to wait for a new API response per scroll round | `2000` |
+| `--out` | Output directory | `./outputs/<sec_user_id>` |
+
+> v3.2 removed the legacy `--cookie`, `--browser`, and `--no-browser` flags. Interception is mandatory because it's the entire reason this version bypasses Douyin's risk control.
 
 ## Output Files
 
@@ -78,108 +69,112 @@ node scripts/collect.mjs --account <URL> --cookie "..." --no-browser
 outputs/MS4wLjABAAAA.../
 ├── summary.json      # Account overview
 ├── videos.json       # Full video list (JSON)
-└── videos.csv        # Video list (CSV, Excel-ready)
+├── videos.csv        # Video list (CSV with UTF-8 BOM, Excel-friendly)
+└── report.html       # Self-contained dark-theme HTML report
 ```
 
-### Example Output
+### Example summary.json
 
 ```json
 {
   "platform": "douyin",
   "id": "MS4wLjABAAAA...",
+  "url": "https://www.douyin.com/user/...",
   "name": "Creator Name",
   "followers": 1000000,
   "videoCount": 500,
   "totalLikes": 50000000,
-  "totalViews": 200000000
+  "totalViews": 200000000,
+  "totalComments": 1000000,
+  "fetchedAt": "2026-06-05T10:00:00.000Z"
 }
 ```
 
-Each video row: `id`, `title`, `url`, `publishedAt`, `duration`, `likes`, `views`, `comments`, `shares`, `favorites`
+Each video row: `id`, `title`, `url`, `publishedAt`, `duration`, `likes`, `views`, `comments`, `shares`, `favorites`, `coins` (always 0 for Douyin; kept for cross-platform schema parity).
+
+### report.html
+
+Drop-in shareable report with avatar, signature, four stat cards, and a sortable + searchable video table. Open it in any browser — no server, no external assets except a Google Fonts stylesheet.
 
 ## How It Works
 
-- **Browser automation**: Playwright + stealth plugin
-- **Signing**: `a_bogus` parameter via RC4 + SM3 hash
-- **APIs**:
-  - User profile: `/aweme/v1/web/user/profile/other/`
-  - Video list: `/aweme/v1/web/aweme/post/` (paginated, 18 per page)
-- **Retry logic**: Exponential backoff, max 5 attempts
-- **UA rotation**: 10 Chrome/Firefox/Safari user agents
+- **Automation**: Playwright (Chrome channel) + `playwright-extra` + `puppeteer-extra-plugin-stealth`
+- **Capture**: `page.on('response')` listens for two endpoints and parses JSON on-the-fly:
+  - `/aweme/v1/web/user/profile/other/` → creator profile (followers, total likes, video count)
+  - `/aweme/v1/web/aweme/post/` → paginated `aweme_list` (18 videos per page)
+- **Pagination**: human-like scroll via `page.mouse.wheel()`; on stalls, jitter (scroll up → scroll back down) re-triggers `IntersectionObserver`
+- **Dedup**: by `aweme_id`, then sliced to `--limit`
+- **Login persistence**: Playwright `launchPersistentContext` saves cookies + localStorage
 
 ## Troubleshooting
 
-### Missing Dependencies
+### Missing Playwright
 
 ```
-Error: Stealth mode requires playwright-extra
+Cannot find package 'playwright-extra'
 ```
 
-**Fix**: Run `npm install`
-
-### Browser Won't Open
-
-```
-Error: Browser auth requires Playwright
-```
-
-**Fix**:
 ```bash
 npm install
 npx playwright install chromium
 ```
 
-### QR Code Scan Not Detected
+### "Failed to capture user profile from network responses"
 
-- Wait up to 10 minutes for auto-detection
-- Verify login succeeded (refresh page in browser)
-- Close browser and retry if stuck
-
-### HTTP 412 / 403 (Risk Control)
-
-Even with browser login, Douyin may block requests:
-- Increase `--delay 10000` (10 seconds)
-- Decrease `--limit 50`
-- Retry after a few minutes
-
-### Login Expired
-
+The login session expired or the account is restricted. Reset:
 ```bash
-# Clear old login, scan again
 rm -rf ./private/profiles/douyin
 node scripts/collect.mjs --account "..."
 ```
+Scan the QR again.
 
-## Browser vs Manual Cookie
+### Scroll runs forever but no new videos
 
-| Method | Pros | Cons |
-|--------|------|------|
-| Browser Login | Auto cookie management<br>High success rate<br>No manual copy | Requires dependencies<br>First-time QR scan |
-| Manual Cookie | No dependencies<br>Quick testing | Cookie expires<br>High block rate<br>Manual updates |
+Douyin sometimes returns `has_more=false` on low-activity accounts. The script auto-stops after **8 consecutive empty rounds**. Compare `summary.videoCount` vs `videos.length`:
+- Equal → all videos captured
+- Mismatch → risk-control intervention; try `--delay 5000` or switch network
+
+### Slider / puzzle captcha appears
+
+**Solve it manually** in the open browser window; the script continues afterward. Don't close the window.
+
+### Chrome channel not found
+
+The script uses `channel: "chrome"`. If you only have Chromium installed, either install Google Chrome or remove that line from `buildBrowserOptions()` in `scripts/collect.mjs`.
+
+## Claude Code Slash Command
+
+This project ships a custom command (`.claude/commands/douyin_skill.md`):
+
+```
+/douyin_skill MS4wLjABAAAA...
+/douyin_skill MS4wLjABAAAA... --limit 50 --delay 5000
+```
+
+Claude `cd`s into the project, runs `collect.mjs`, then summarizes the output.
 
 ## Structure
 
 ```
 douyin_skill/
-├── SKILL.md                          # Full documentation (中文)
-├── README.md                         # This file
-├── EXAMPLES.md                       # Usage examples
-├── package.json                      # Dependencies
-├── private/profiles/douyin/          # Browser login state (auto)
-├── outputs/                          # Collection results (auto)
+├── SKILL.md                  # Chinese skill documentation (loaded by Claude)
+├── README.md                 # This file (English)
+├── EXAMPLES.md               # Usage examples
+├── CHANGELOG.md              # Version history
+├── package.json
+├── .claude/
+│   └── commands/
+│       └── douyin_skill.md   # Slash-command definition
+├── private/profiles/douyin/  # Persistent browser profile (auto, gitignored)
+├── outputs/                  # Collection results (auto, gitignored)
 └── scripts/
-    ├── collect.mjs                   # CLI with browser login
+    ├── collect.mjs           # v3.2 entry — interceptor + HTML report
     └── adapters/
-        ├── douyin.mjs                # Collection logic
-        └── douyin-sign.js            # a_bogus signing (RC4 + SM3)
+        ├── stealth.min.js    # Anti-detection init script
+        ├── douyin.mjs        # Legacy HTTP adapter (v2.x; unused by current collect.mjs)
+        └── douyin-sign.js    # Legacy a_bogus signing (v1.x; unused)
 ```
-
-## Documentation
-
-- [SKILL.md](SKILL.md) - Full documentation in Chinese
-- [EXAMPLES.md](EXAMPLES.md) - Usage examples and troubleshooting
-- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Technical overview
 
 ## License
 
-Educational use only. Signing code from [ShilongLee/Crawler](https://github.com/ShilongLee/Crawler).
+Educational use only. Legacy signing code (kept for reference, no longer used in v3.2) originally from [ShilongLee/Crawler](https://github.com/ShilongLee/Crawler).

@@ -1,24 +1,36 @@
-# Usage Examples
+# Usage Examples (v3.2)
 
-## 浏览器登录模式（推荐）
+> v3.2 是纯浏览器拦截器架构。所有示例都不再涉及 `--cookie` / `--no-browser`，那些参数已被移除。
 
-### 基础用法
+## 基础用法
+
+### 最简单的方式
 
 ```bash
-# 最简单的方式 - 自动打开浏览器扫码
-node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAAxOXMMgun8wa_2H tuKg7EFlm38CYhLNzQ3xR6iZT5s"
+node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
 **流程演示：**
 ```
-[douyin_skill] Collecting account: https://www.douyin.com/user/MS4wLjABAAAA...
-[douyin_skill] Mode: Browser Login
-[douyin_skill] limit=200, delay=5000ms
-[Browser] Waiting for login... Please scan QR code or login in the browser.
-[Browser] Login detected! Cookies saved to profile.
-[Browser] Starting collection with authenticated session...
+[douyin_skill v3.2] Collecting account: MS4wLjABAAAA...
+[douyin_skill v3.2] Mode: Playwright API Interceptor
+[douyin_skill v3.2] limit=200, delay=2000ms
+[Stealth] Anti-detection script injected.
+[Browser] Checking login status...
+[Browser] Login detected!
+[Browser] Navigating to user page: https://www.douyin.com/user/MS4wLjABAAAA...
+[Capture] Profile details captured for: 创作者昵称
+[Capture] Captured 18 videos (Total: 18, hasMore: true)
+[Browser] Waiting 12 seconds for natural loads to stabilize page layout...
+[Browser] Layout stabilized. Initial videos captured: 36
+[Browser] Starting scroll loop to fetch videos...
+[Browser] Scroll triggered new data. Total videos: 54
+[Browser] Scroll triggered new data. Total videos: 72
+...
+[Browser] Server reported hasMore=false. All videos fetched.
+[Browser] Finished fetching. Deduplicating data...
 
-[douyin_skill] Done!
+[douyin_skill v3.2] Done!
   Account : 创作者昵称 (MS4wLjABAAAA...)
   Followers: 1,234,567
   Videos  : 200 fetched (total: 500)
@@ -27,279 +39,212 @@ node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAAxOXM
   Output  : ./outputs/MS4wLjABAAAA...
 ```
 
-### 自定义配置文件位置
-
-```bash
-# 使用自定义浏览器配置文件目录
-node scripts/collect.mjs \
-  --account "https://www.douyin.com/user/MS4wLjABAAAA..." \
-  --profile ./my_profiles/douyin_account_1
-```
-
-**用途：**
-- 管理多个抖音账号登录状态
-- 每个账号使用独立的配置文件
-
 ### 限制采集数量
 
 ```bash
-# 只采集最新 50 个视频
-node scripts/collect.mjs \
-  --account "MS4wLjABAAAA..." \
-  --limit 50
+node scripts/collect.mjs --account "MS4wLjABAAAA..." --limit 50
 ```
 
-### 增加请求间隔（避免风控）
+### 调整滚动等待时间
+
+`--delay` 是**单轮滚动等待新 API 响应的最大毫秒数**。默认 2000 已适合大多数账号，遇风控可加大：
 
 ```bash
-# 每个请求间隔 10 秒
-node scripts/collect.mjs \
-  --account "https://www.douyin.com/user/MS4wLjABAAAA..." \
-  --delay 10000 \
-  --limit 100
+node scripts/collect.mjs --account "..." --delay 5000 --limit 100
 ```
 
 ### 自定义输出目录
 
 ```bash
-# 保存到指定目录
 node scripts/collect.mjs \
   --account "MS4wLjABAAAA..." \
   --out ./data/douyin_creator_20260605
 ```
 
-## 手动 Cookie 模式
-
-### 获取 Cookie
-
-1. 浏览器打开 `https://www.douyin.com` 并登录
-2. 按 `F12` 打开开发者工具
-3. 切换到 **Network** 标签
-4. 刷新页面
-5. 点击任意请求
-6. 在右侧找到 **Request Headers**
-7. 复制 `cookie:` 后面的完整内容
-
-### 使用手动 Cookie
+### 多账号隔离（独立 Cookie）
 
 ```bash
-node scripts/collect.mjs \
-  --account "https://www.douyin.com/user/MS4wLjABAAAA..." \
-  --cookie "msToken=VkDUvz1y24CppXSl80iFPr6ez-3FiizcwD7fI1OqBt6I...; ttwid=1%7C...; sessionid=..." \
-  --no-browser
+node scripts/collect.mjs --account "账号1URL" --profile ./private/profiles/account1
+node scripts/collect.mjs --account "账号2URL" --profile ./private/profiles/account2
 ```
 
-### 保存 Cookie 到文件
+## 用 Claude Code 斜杠命令
 
-```bash
-# 创建 cookie.txt
-echo "msToken=xxx; ttwid=xxx; sessionid=xxx; ..." > cookie.txt
-
-# 使用
-node scripts/collect.mjs \
-  --account "抖音用户URL" \
-  --cookie "$(cat cookie.txt)" \
-  --no-browser
 ```
+/douyin_skill MS4wLjABAAAA...
+/douyin_skill MS4wLjABAAAA... --limit 50
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --delay 5000 --out ./data/today
+```
+
+Claude 会自动 `cd` 到本项目运行 `node scripts/collect.mjs` 并总结结果。
 
 ## 高级用法
 
 ### 批量采集多个账号
 
-创建 `accounts.txt`:
+创建 `accounts.txt`：
 ```
-MS4wLjABAAAA... Creator1
-MS4wLjABAAAA... Creator2
-MS4wLjABAAAA... Creator3
+MS4wLjABAAAAxxx Creator1
+MS4wLjABAAAAyyy Creator2
+MS4wLjABAAAAzzz Creator3
 ```
 
-批量脚本 `batch_collect.sh`:
+`batch_collect.sh`：
 ```bash
 #!/bin/bash
 while IFS=' ' read -r account name; do
-  echo "Collecting: $name"
+  echo "=== Collecting: $name ==="
   node scripts/collect.mjs \
     --account "$account" \
     --out "./outputs/$name" \
     --limit 100
-  sleep 60  # 每个账号间隔 1 分钟
+  # 每个账号间隔 60 秒，给浏览器和服务端缓冲
+  sleep 60
 done < accounts.txt
 ```
 
-运行：
 ```bash
 chmod +x batch_collect.sh
 ./batch_collect.sh
 ```
 
-### 定时采集（Cron）
+### 定时采集（Linux/macOS cron）
 
-每天凌晨 3 点采集：
-```bash
-crontab -e
+每天凌晨 3 点：
+```cron
+0 3 * * * cd /path/to/douyin_skill && node scripts/collect.mjs --account "MS4wLjABAAAA..." --out ./outputs/daily_$(date +\%Y\%m\%d) >> ./logs/cron.log 2>&1
 ```
 
-添加：
+注意：cron 环境通常无图形界面，**首次必须人工运行一次完成扫码**，把登录态写入 `private/profiles/douyin/` 后 cron 才能复用。
+
+### 定时采集（Windows 任务计划程序）
+
+新建任务，操作设为：
 ```
-0 3 * * * cd /path/to/douyin_skill && node scripts/collect.mjs --account "MS4wLjABAAAA..." --out ./outputs/daily_$(date +\%Y\%m\%d)
-```
-
-### 作为 Node.js 模块使用
-
-```javascript
-import { collect } from "./scripts/adapters/douyin.mjs";
-
-const result = await collect({
-  account: "MS4wLjABAAAA...",
-  cookieHeader: "msToken=xxx; ttwid=xxx; sessionid=xxx",
-  limit: 100,
-  delay: 5000,
-});
-
-console.log(`Collected ${result.videos.length} videos`);
-console.log(`Total likes: ${result.account.totalLikes}`);
+程序: C:\Program Files\nodejs\node.exe
+参数: scripts\collect.mjs --account "MS4wLjABAAAA..."
+起始位置: D:\edgedownload\ai_projects\douyin_skill
 ```
 
 ## 常见场景
 
-### 场景 1: 首次使用
+### 场景 1：首次使用
 
 ```bash
-# 1. 安装依赖
 npm install
-
-# 2. 运行采集（自动打开浏览器）
+npx playwright install chromium
 node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
-
-# 3. 浏览器中扫码登录
-
-# 4. 等待采集完成
+# 浏览器打开 → 扫码登录 → 自动开始采集
 ```
 
-### 场景 2: 每日更新
+### 场景 2：每日更新
 
 ```bash
-# 登录状态已保存，直接运行即可
+# 登录已持久化，直接跑
 node scripts/collect.mjs \
   --account "MS4wLjABAAAA..." \
   --limit 50 \
   --out ./outputs/update_$(date +%Y%m%d)
 ```
 
-### 场景 3: 快速测试（不想用浏览器）
+### 场景 3：大量采集（避免风控）
 
 ```bash
-# 手动复制 Cookie，快速测试
 node scripts/collect.mjs \
   --account "MS4wLjABAAAA..." \
-  --cookie "你的Cookie" \
-  --no-browser \
-  --limit 10
-```
-
-### 场景 4: 大量采集（避免风控）
-
-```bash
-# 增加间隔，减少频率
-node scripts/collect.mjs \
-  --account "MS4wLjABAAAA..." \
-  --delay 15000 \
+  --delay 5000 \
   --limit 500
 ```
 
-### 场景 5: 多账号管理
+### 场景 4：把 HTML 报告分享给非技术同事
 
+采集完成后：
 ```bash
-# 账号 1
-node scripts/collect.mjs \
-  --account "账号1URL" \
-  --profile ./profiles/account1
+# Windows
+start outputs/MS4wLjABAAAA.../report.html
 
-# 账号 2
-node scripts/collect.mjs \
-  --account "账号2URL" \
-  --profile ./profiles/account2
+# macOS
+open outputs/MS4wLjABAAAA.../report.html
+
+# Linux
+xdg-open outputs/MS4wLjABAAAA.../report.html
 ```
+
+`report.html` 是单文件（仅外链 Google Fonts CSS），可直接邮件 / IM 发送。
 
 ## 故障排除示例
 
-### 问题 1: 依赖未安装
+### 问题 1：依赖未安装
 
 ```
 Error: Cannot find package 'playwright-extra'
 ```
 
-**解决：**
 ```bash
 npm install
 ```
 
-### 问题 2: 浏览器未安装
+### 问题 2：Chromium 未下载
 
 ```
 Error: Executable doesn't exist at ...
 ```
 
-**解决：**
 ```bash
 npx playwright install chromium
 ```
 
-### 问题 3: 扫码后无反应
+### 问题 3：扫码后无反应
+
+`waitForLogin()` 最长等 10 分钟。如果一直卡住：
+1. 检查浏览器是否真的登录（手动刷新 douyin.com 看是否需要重登）
+2. 关闭浏览器
+3. 清除并重试：
+   ```bash
+   rm -rf ./private/profiles/douyin
+   node scripts/collect.mjs --account "..."
+   ```
+
+### 问题 4：Failed to capture user profile
 
 ```
-[Browser] Waiting for login... Please scan QR code or login in the browser.
-(一直卡住)
+Error: Failed to capture user profile from network responses.
 ```
 
-**排查：**
+通常是登录态失效或目标账号被风控。解决：
 ```bash
-# 1. 检查浏览器是否真的登录成功
-# 2. 刷新页面，看是否需要重新登录
-# 3. 关闭浏览器，删除旧配置重试
 rm -rf ./private/profiles/douyin
 node scripts/collect.mjs --account "..."
 ```
+重新扫码。
 
-### 问题 4: HTTP 412 风控
+### 问题 5：滑动验证码 / 拼图
 
-```
-Error: HTTP 412: Douyin risk-control ban (retryable)
-```
+页面上手动完成验证，**不要关浏览器**，脚本会继续。
 
-**解决：**
-```bash
-# 1. 增加请求间隔
-node scripts/collect.mjs --account "..." --delay 10000
+### 问题 6：滚动无新数据 8 轮自动停止
 
-# 2. 减少采集数量
-node scripts/collect.mjs --account "..." --limit 50
+正常行为。看终端最后输出的 `Total videos: N`：
+- N == `summary.videoCount` → 已采全
+- N < `summary.videoCount` → 风控干预，加大 `--delay` 或换网络重试
 
-# 3. 等待几分钟后重试
-sleep 300 && node scripts/collect.mjs --account "..."
-```
-
-### 问题 5: Cookie 过期
+### 问题 7：找不到 Chrome
 
 ```
-Error: Douyin API error code=2053: 用户未登录
+Error: ... channel "chrome" ...
 ```
 
-**解决：**
-```bash
-# 清除旧登录状态，重新扫码
-rm -rf ./private/profiles/douyin
-node scripts/collect.mjs --account "..."
-```
+脚本默认走系统 Chrome。要么装 Chrome，要么编辑 `scripts/collect.mjs` 删掉 `channel: "chrome"` 那一行使用内置 Chromium。
 
 ## 输出示例
 
 ### summary.json
+
 ```json
 {
   "platform": "douyin",
-  "id": "MS4wLjABAAAAxOXMMgun8wa_2H",
-  "url": "https://www.douyin.com/user/MS4wLjABAAAAxOXMMgun8wa_2H",
+  "id": "MS4wLjABAAAA...",
+  "url": "https://www.douyin.com/user/MS4wLjABAAAA...",
   "name": "某抖音创作者",
   "followers": 1234567,
   "videoCount": 500,
@@ -310,7 +255,8 @@ node scripts/collect.mjs --account "..."
 }
 ```
 
-### videos.json（部分）
+### videos.json（截选一条）
+
 ```json
 [
   {
@@ -329,21 +275,32 @@ node scripts/collect.mjs --account "..."
 ]
 ```
 
-### videos.csv（Excel 打开效果）
+### videos.csv（Excel 打开）
+
 ```
 id,title,url,publishedAt,duration,likes,views,comments,shares,favorites,coins
 7123456789012345678,"视频标题",https://www.douyin.com/video/7123456789012345678,2026-06-01T10:00:00+08:00,03:21,12000,230000,321,45,67,0
 ...
 ```
 
+含 UTF-8 BOM，Excel 直接打开中文不乱码。
+
+### report.html
+
+打开后包含：
+- 顶部：头像、昵称、签名、平台徽标、采集时间、视频进度
+- 四张统计卡：粉丝数 / 视频总数 / 获赞总数 / 评论总数
+- 视频表格：可点列头排序，可在搜索框过滤标题，行可点击跳转到视频页
+
 ## 性能参考
 
-| 视频数量 | 预计时间 | 建议配置 |
+| 视频数量 | 预计时间 | 建议参数 |
 |---------|---------|---------|
-| 10 | ~1 分钟 | `--delay 5000` |
-| 50 | ~5 分钟 | `--delay 5000` |
-| 100 | ~10 分钟 | `--delay 5000` |
-| 200 | ~20 分钟 | `--delay 5000` |
-| 500+ | ~1 小时 | `--delay 10000` |
+| 10 | ~30 秒 | 默认 |
+| 50 | ~2 分钟 | 默认 |
+| 100 | ~4 分钟 | 默认 |
+| 200 | ~8 分钟 | 默认 |
+| 500+ | ~25 分钟 | `--delay 5000` |
 
-**注意：** 实际时间受网络、风控、服务器响应影响。
+> v3.2 拦截器走的是浏览器自身的请求节奏，比 v2.x 的 HTTP 重放快很多，无需上千毫秒的退避。
+> 实际时间受网络、风控、目标账号活跃度影响。

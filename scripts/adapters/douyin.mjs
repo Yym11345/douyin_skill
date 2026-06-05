@@ -125,11 +125,11 @@ function buildHeaders(ua, referer, cookieHeader) {
 }
 
 // ── Request with retry + exponential backoff ──────────────────────────
-async function getJson(endpoint, params, referer, cookieHeader = "", retries = 5) {
+async function getJson(endpoint, params, referer, cookieHeader = "", retries = 2, customUA = null, fetchFn = null) {
   let lastError;
   for (let attempt = 0; attempt < retries; attempt += 1) {
     try {
-      const ua = randItem(UA_POOL);
+      const ua = customUA || randItem(UA_POOL);
       const commonParams = getCommonParams(ua);
       const msToken = extractMsToken(cookieHeader);
       const allParams = { ...commonParams, ...params, msToken };
@@ -145,7 +145,7 @@ async function getJson(endpoint, params, referer, cookieHeader = "", retries = 5
       const url = `https://www.douyin.com${endpoint}?${queryStr}&a_bogus=${encodeURIComponent(aBogus)}`;
 
       const headers = buildHeaders(ua, referer, cookieHeader);
-      const response = await fetch(url, { headers });
+      const response = await (fetchFn ? fetchFn(url, { headers }) : fetch(url, { headers }));
 
       if (response.status === 412 || response.status === 403) {
         throw new Error(`HTTP ${response.status}: Douyin risk-control ban (retryable)`);
@@ -167,8 +167,7 @@ async function getJson(endpoint, params, referer, cookieHeader = "", retries = 5
     } catch (error) {
       lastError = error;
       if (attempt < retries - 1) {
-        const base = 3000 * 2 ** attempt;
-        await sleep(base);
+        await sleep(2000);
       }
     }
   }
@@ -191,7 +190,7 @@ function formatDuration(seconds) {
 }
 
 // ── Main collect function ────────────────────────────────────────────
-export async function collect({ account, cookieHeader = "", limit, delay = 5000 }) {
+export async function collect({ account, cookieHeader = "", limit, delay = 5000, customUA = null, fetchFn = null }) {
   const secUserId = extractSecUserId(account);
   const userUrl = `https://www.douyin.com/user/${secUserId}`;
   const refererBase = `https://www.douyin.com/user/${secUserId}`;
@@ -206,6 +205,9 @@ export async function collect({ account, cookieHeader = "", limit, delay = 5000 
     },
     refererBase,
     cookieHeader,
+    2,
+    customUA,
+    fetchFn
   );
   await sleep(delay);
 
@@ -234,6 +236,9 @@ export async function collect({ account, cookieHeader = "", limit, delay = 5000 
       },
       refererBase,
       cookieHeader,
+      2,
+      customUA,
+      fetchFn
     );
     await sleep(delay);
 
