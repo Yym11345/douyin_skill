@@ -36,6 +36,37 @@ echo "[2/2] 安装 Playwright Chromium 浏览器（约 130 MB）..."
 npx playwright install chromium
 echo "[✓] Chromium 安装完成"
 
+# Check Google Chrome
+echo ""
+echo "[3/3] 检测 Google Chrome..."
+
+CHROME_FOUND=false
+for chrome_bin in \
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  "/usr/bin/google-chrome" \
+  "/usr/bin/google-chrome-stable" \
+  "/usr/local/bin/google-chrome"; do
+  if [ -f "$chrome_bin" ]; then
+    CHROME_FOUND=true
+    break
+  fi
+done
+
+if [ "$CHROME_FOUND" = false ]; then
+  echo ""
+  echo " ╔══════════════════════════════════════════════════════╗"
+  echo " ║  [必须] 未检测到 Google Chrome                      ║"
+  echo " ║                                                      ║"
+  echo " ║  本工具需要系统 Chrome 以绕过抖音风控检测。          ║"
+  echo " ║  请访问以下地址下载安装，完成后重新运行即可：        ║"
+  echo " ║                                                      ║"
+  echo " ║  https://www.google.com/chrome/                     ║"
+  echo " ╚══════════════════════════════════════════════════════╝"
+  echo ""
+else
+  echo "[✓] Google Chrome 已安装"
+fi
+
 echo ""
 echo " ══════════════════════════════════════════"
 echo " 安装完成！使用方法："

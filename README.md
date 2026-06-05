@@ -24,7 +24,11 @@ cd douyin_skill
 chmod +x setup.sh && ./setup.sh
 ```
 
-> **前提**：需要 [Node.js 18+](https://nodejs.org/)，安装脚本会自动下载 Chromium（约 130 MB）。
+> **前提**：
+> - [Node.js 18+](https://nodejs.org/)
+> - [Google Chrome](https://www.google.com/chrome/)（**必须安装**，用于绕过抖音风控指纹检测）
+>
+> 安装脚本会自动下载 Playwright 所需的 Chromium（~130 MB），但实际采集强制使用系统 Chrome。
 
 ---
 

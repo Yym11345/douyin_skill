@@ -40,6 +40,32 @@ if %errorlevel% neq 0 (
 )
 echo [✓] Chromium 安装完成
 
+:: Check Google Chrome
+echo.
+echo [3/3] 检测 Google Chrome...
+set CHROME_PATH=
+if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
+  set CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+)
+if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" (
+  set CHROME_PATH=C:\Program Files (x86)\Google\Chrome\Application\chrome.exe
+)
+
+if "%CHROME_PATH%"=="" (
+  echo.
+  echo  ╔══════════════════════════════════════════════════════╗
+  echo  ║  [必须] 未检测到 Google Chrome                      ║
+  echo  ║                                                      ║
+  echo  ║  本工具需要系统 Chrome 以绕过抖音风控检测。          ║
+  echo  ║  请访问以下地址下载安装，完成后重新运行即可：        ║
+  echo  ║                                                      ║
+  echo  ║  https://www.google.com/chrome/                     ║
+  echo  ╚══════════════════════════════════════════════════════╝
+  echo.
+) else (
+  echo [✓] Google Chrome 已安装
+)
+
 echo.
 echo  ══════════════════════════════════════════
 echo  安装完成！使用方法：

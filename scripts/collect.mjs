@@ -38,12 +38,12 @@ async function loadPlaywright() {
   }
 }
 
-function buildBrowserOptions(useChrome = true) {
+function buildBrowserOptions() {
   return {
     acceptDownloads: true,
-    // Use system Chrome when available for a more authentic browser fingerprint;
-    // falls back to Playwright-managed Chromium automatically if Chrome is not found.
-    ...(useChrome ? { channel: "chrome" } : {}),
+    // Force system Google Chrome for authentic TLS fingerprint and lower risk-control detection.
+    // Playwright Chromium is NOT used — its fingerprint is more easily identified by Douyin.
+    channel: "chrome",
     headless: false,
     viewport: { width: 1280, height: 800 },
     locale: "zh-CN",
@@ -610,24 +610,25 @@ if (!args.account) {
 
   const { chromium } = await loadPlaywright();
 
-  // Try launching with system Chrome first; fall back to Playwright-bundled Chromium
-  // so the tool works even without Google Chrome installed.
+  // Launch with system Google Chrome (required).
+  // Chrome's authentic TLS/HTTP fingerprint is essential for bypassing Douyin risk control.
   let context;
   try {
-    context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions(true));
+    context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions());
     console.log("[Browser] Using system Google Chrome.");
   } catch (chromeErr) {
     if (
       chromeErr.message.includes("chrome") ||
       chromeErr.message.includes("channel") ||
       chromeErr.message.includes("executable") ||
-      chromeErr.message.includes("找不到")
+      chromeErr.message.includes("not found")
     ) {
-      console.warn("[Browser] Google Chrome not found — falling back to Playwright Chromium.");
-      context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions(false));
-    } else {
-      throw chromeErr;
+      console.error("\n[错误] 未检测到系统 Google Chrome，请先安装后重试。");
+      console.error("\n  下载地址：https://www.google.com/chrome/");
+      console.error("  安装完成后无需额外配置，直接重新运行即可。\n");
+      process.exit(1);
     }
+    throw chromeErr;
   }
 
   try {
