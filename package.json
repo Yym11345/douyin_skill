@@ -1,9 +1,14 @@
 {
-  "name": "douyin_skill",
-  "private": true,
+  "name": "douyin-skill",
+  "version": "3.2.0",
+  "description": "Douyin (抖音) creator account data collector — browser-native API interception, no signing required",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "collect": "node scripts/collect.mjs",
+    "setup": "npm install && npx playwright install chromium",
     "install-browser": "npx playwright install chromium"
   },
   "dependencies": {

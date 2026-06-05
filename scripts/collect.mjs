@@ -38,10 +38,12 @@ async function loadPlaywright() {
   }
 }
 
-function buildBrowserOptions() {
+function buildBrowserOptions(useChrome = true) {
   return {
     acceptDownloads: true,
-    channel: "chrome",
+    // Use system Chrome when available for a more authentic browser fingerprint;
+    // falls back to Playwright-managed Chromium automatically if Chrome is not found.
+    ...(useChrome ? { channel: "chrome" } : {}),
     headless: false,
     viewport: { width: 1280, height: 800 },
     locale: "zh-CN",
@@ -607,7 +609,26 @@ if (!args.account) {
   await mkdir(profileDir, { recursive: true });
 
   const { chromium } = await loadPlaywright();
-  const context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions());
+
+  // Try launching with system Chrome first; fall back to Playwright-bundled Chromium
+  // so the tool works even without Google Chrome installed.
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions(true));
+    console.log("[Browser] Using system Google Chrome.");
+  } catch (chromeErr) {
+    if (
+      chromeErr.message.includes("chrome") ||
+      chromeErr.message.includes("channel") ||
+      chromeErr.message.includes("executable") ||
+      chromeErr.message.includes("找不到")
+    ) {
+      console.warn("[Browser] Google Chrome not found — falling back to Playwright Chromium.");
+      context = await chromium.launchPersistentContext(profileDir, buildBrowserOptions(false));
+    } else {
+      throw chromeErr;
+    }
+  }
 
   try {
     // Inject stealth script
@@ -829,6 +850,6 @@ if (!args.account) {
     console.error(`[douyin_skill v3.2] Error: ${err.message}`);
     process.exit(1);
   } finally {
-    await context.close();
+    if (context) await context.close();
   }
 })();
