@@ -165,6 +165,33 @@ douyin_skill/
 
 ---
 
+## 在 Claude Code 中使用 `/douyin_skill` 命令
+
+如果你使用 [Claude Code](https://claude.ai/code)，可以通过 `/douyin_skill` 命令一键调用，无需手动输入 `node scripts/collect.mjs`。
+
+### 启用步骤
+
+1. 克隆仓库后，在 Claude Code 中**将项目目录设为当前 Workspace**
+2. 输入 `/douyin_skill` 即可看到命令提示
+3. 直接粘贴抖音主页 URL：
+
+```
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA...
+```
+
+支持所有参数：
+
+```
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --limit 500
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --delay 5000 --out ./data/A
+```
+
+Claude 会自动运行采集、等待完成，并输出结果摘要。
+
+> Slash command 定义文件位于 `.claude/commands/douyin_skill.md`，已随代码一起提交到 GitHub。
+
+---
+
 ## License
 
 Educational use only.
