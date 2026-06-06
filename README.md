@@ -6,7 +6,31 @@
 
 ---
 
-## 快速安装（3 步）
+## 方式一：全局安装（推荐）
+
+安装后在**任意 Claude Code Workspace** 中都可以直接使用 `/douyin_skill` 命令。
+
+### Windows（在 Claude Code 终端运行）
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "& { iwr https://raw.githubusercontent.com/Yym11345/douyin_skill/master/install.ps1 -OutFile $env:TEMP\install_dy.ps1; & $env:TEMP\install_dy.ps1 }"
+```
+
+### macOS / Linux（在 Claude Code 终端运行）
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Yym11345/douyin_skill/master/install.sh)
+```
+
+安装完成后，**无需切换 Workspace**，在当前 Workspace 直接输入：
+
+```
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA...
+```
+
+---
+
+## 方式二：作为独立项目使用
 
 ### Windows
 
@@ -24,9 +48,11 @@ cd douyin_skill
 chmod +x setup.sh && ./setup.sh
 ```
 
+> **注意**：方式二需要将 `douyin_skill` 目录设为 Claude Code 的 Workspace 才能使用 `/douyin_skill` 命令。
+
 > **前提**：
 > - [Node.js 18+](https://nodejs.org/)
-> - [Google Chrome](https://www.google.com/chrome/)（**必须安装**，用于绕过抖音风控指纹检测）
+> - [Google Chrome](https://www.google.com/chrome/)（安装脚本会自动安装）
 >
 > 安装脚本会自动下载 Playwright 所需的 Chromium（~130 MB），但实际采集强制使用系统 Chrome。
 
