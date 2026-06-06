@@ -149,9 +149,10 @@ function toIso(ts) {
   return new Date(ms + 8 * 3600 * 1000).toISOString().replace(".000Z", "+08:00");
 }
 
-function formatDuration(seconds) {
-  if (!seconds) return "";
-  const s = Number(seconds);
+function formatDuration(ms) {
+  if (!ms) return "";
+  // Douyin API returns duration in milliseconds
+  const s = Math.round(Number(ms) / 1000);
   const mins = Math.floor(s / 60);
   const secs = s % 60;
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
