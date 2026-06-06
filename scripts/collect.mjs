@@ -15,7 +15,7 @@
  * - 支持扫码登录与验证码登录，并且断线可重连，出现滑动验证码时可人工交互解决
  */
 
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -895,7 +895,14 @@ function sanitizeName(name) {
     // Resolve final output directory: prefer --out, then nickname, then sec_user_id
     if (!outDir) {
       const nickname = sanitizeName(userInfo.nickname || "");
-      outDir = join("./outputs", nickname || secUserId);
+      const baseName = nickname || secUserId;
+      let candidate = join("./outputs", baseName);
+      // Disambiguate when a directory with this name already exists
+      // (likely created by a different sec_user_id with the same nickname).
+      if (existsSync(candidate)) {
+        candidate = `${candidate}_${secUserId.slice(0, 12)}`;
+      }
+      outDir = candidate;
     }
 
     // Save results
