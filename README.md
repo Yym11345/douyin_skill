@@ -171,13 +171,29 @@ douyin_skill/
 
 ## 在 Claude Code 中使用 `/douyin_skill` 命令
 
-如果你使用 [Claude Code](https://claude.ai/code)，可以通过 `/douyin_skill` 命令一键调用，无需手动输入 `node scripts/collect.mjs`。
+如果你使用 [Claude Code](https://claude.ai/code)，可以通过 `/douyin_skill` 命令一键调用。
 
-### 启用步骤
+> **重要**：Slash command 从当前 Workspace 的 `.claude/commands/` 目录加载，  
+> 所以必须先将本项目目录**设置为 Claude Code 的 Workspace**，命令才会生效。
 
-1. 克隆仓库后，在 Claude Code 中**将项目目录设为当前 Workspace**
-2. 输入 `/douyin_skill` 即可看到命令提示
-3. 直接粘贴抖音主页 URL：
+### 完整启用步骤
+
+**第一步：克隆并安装**
+```bash
+git clone https://github.com/Yym11345/douyin_skill.git
+cd douyin_skill
+setup.bat        # Windows
+# 或
+./setup.sh       # macOS / Linux
+```
+
+**第二步：在 Claude Code 中设置 Workspace**
+
+打开 Claude Code → 点击左侧文件夹图标 → 选择 `douyin_skill` 目录 → 设为当前 Workspace
+
+✅ 设置成功后，输入 `/` 即可在列表中看到 `douyin_skill` 命令。
+
+**第三步：直接使用**
 
 ```
 /douyin_skill https://www.douyin.com/user/MS4wLjABAAAA...
@@ -187,12 +203,21 @@ douyin_skill/
 
 ```
 /douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --limit 500
-/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --delay 5000 --out ./data/A
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --relogin
+/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --profile ./private/profiles/account_B
 ```
 
-Claude 会自动运行采集、等待完成，并输出结果摘要。
+Claude 会自动运行采集脚本、等待完成，并输出结果摘要。
 
-> Slash command 定义文件位于 `.claude/commands/douyin_skill.md`，已随代码一起提交到 GitHub。
+### 没有设置 Workspace 能用吗？
+
+❌ **不能**。如果没有设置 Workspace，Claude Code 不会加载 `.claude/commands/` 目录，`/douyin_skill` 命令不会出现在列表中。
+
+| 状态 | `/douyin_skill` 可用？ |
+|------|----------------------|
+| 已设置 douyin_skill 为 Workspace | ✅ 可用 |
+| 未设置 Workspace | ❌ 不可用 |
+| 仅在 GitHub 上查看代码 | ❌ 不可用 |
 
 ---
 
