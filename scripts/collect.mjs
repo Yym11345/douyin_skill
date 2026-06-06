@@ -808,18 +808,58 @@ if (!args.account) {
     // Map to final schema
     const videos = uniqueVideos.map((video) => {
       const stats = video.statistics || {};
+
+      // ── Content type ────────────────────────────────────────────────
+      // aweme_type: 0=video, 4=landscape_video, 61=live_replay,
+      //             68=image_text (图文), 2=image_only
+      const awemeType = video.aweme_type ?? 0;
+      let type = "video";
+      if (awemeType === 68 || awemeType === 2) type = "image_text";
+      else if (awemeType === 61) type = "live_replay";
+      else if (awemeType === 51) type = "live";
+
+      // ── Cover image ─────────────────────────────────────────────────
+      const coverUrl =
+        video.video?.cover?.url_list?.[0] ||
+        video.video?.origin_cover?.url_list?.[0] ||
+        "";
+
+      // ── Image list (图文 posts) ──────────────────────────────────────
+      const imageUrls = Array.isArray(video.images)
+        ? video.images.map(img => img?.url_list?.[0] || "").filter(Boolean)
+        : [];
+
+      // ── Hashtags / topics ────────────────────────────────────────────
+      const tags = (video.text_extra || [])
+        .filter(t => t.hashtag_name)
+        .map(t => t.hashtag_name);
+
+      // ── Background music ─────────────────────────────────────────────
+      const musicTitle = video.music?.title || "";
+      const musicAuthor = video.music?.author || "";
+
+      // ── Pinned post ──────────────────────────────────────────────────
+      const isTop = video.is_top === 1;
+
       return {
         id: String(video.aweme_id),
+        type,                              // video | image_text | live_replay | live
         title: video.desc || "",
         url: `https://www.douyin.com/video/${video.aweme_id}`,
         publishedAt: toIso(video.create_time),
-        duration: formatDuration(video.duration),
+        duration: type === "video" ? formatDuration(video.duration) : "",
+        isTop,
         likes: stats.digg_count ?? 0,
         views: stats.play_count ?? 0,
         comments: stats.comment_count ?? 0,
         shares: stats.share_count ?? 0,
         favorites: stats.collect_count ?? 0,
         coins: 0,
+        coverUrl,
+        imageUrls,                         // non-empty for image_text posts
+        tags,
+        musicTitle,
+        musicAuthor,
       };
     });
 
@@ -845,10 +885,25 @@ if (!args.account) {
     writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
     writeFileSync(join(outDir, "videos.json"), JSON.stringify(videos, null, 2), "utf8");
 
-    // CSV
-    const csvHeader = "id,title,url,publishedAt,duration,likes,views,comments,shares,favorites,coins";
+    // CSV — include new fields
+    const csvHeader = "id,type,title,url,publishedAt,duration,isTop,likes,views,comments,shares,favorites,tags,musicTitle";
     const csvRows = videos.map((v) =>
-      [v.id, `"${String(v.title).replace(/"/g, '""')}"`, v.url, v.publishedAt, v.duration, v.likes, v.views, v.comments, v.shares, v.favorites, v.coins].join(",")
+      [
+        v.id,
+        v.type,
+        `"${String(v.title).replace(/"/g, '""')}"`,
+        v.url,
+        v.publishedAt,
+        v.duration,
+        v.isTop ? "1" : "0",
+        v.likes,
+        v.views,
+        v.comments,
+        v.shares,
+        v.favorites,
+        `"${(v.tags || []).join(" ")}"`,
+        `"${String(v.musicTitle || "").replace(/"/g, '""')}"`,
+      ].join(",")
     );
     writeFileSync(join(outDir, "videos.csv"), "\ufeff" + [csvHeader, ...csvRows].join("\n"), "utf8");
 
@@ -857,10 +912,15 @@ if (!args.account) {
     writeFileSync(join(outDir, "report.html"), htmlReport, "utf8");
 
     // Summary
+    const typeCount = {};
+    for (const v of videos) typeCount[v.type] = (typeCount[v.type] || 0) + 1;
+    const typeStr = Object.entries(typeCount).map(([t, n]) => `${t}:${n}`).join("  ");
+
     console.log("\n[douyin_skill v3.2] Done!");
     console.log(`  Account : ${summary.name} (${summary.id})`);
     console.log(`  Followers: ${summary.followers.toLocaleString()}`);
-    console.log(`  Videos  : ${videos.length} fetched (total: ${summary.videoCount})`);
+    console.log(`  Posts   : ${videos.length} fetched (total: ${summary.videoCount})`);
+    console.log(`  Types   : ${typeStr}`);
     console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
     console.log(`  Views   : ${summary.totalViews.toLocaleString()}`);
     console.log(`  Output  : ${outDir}`);
