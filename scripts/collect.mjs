@@ -601,12 +601,23 @@ if (!args.account) {
   process.exit(1);
 }
 
+// Sanitize a string for use as a directory name (Windows + Unix safe)
+function sanitizeName(name) {
+  return String(name)
+    .replace(/[\\/:*?"<>|]/g, "")   // strip Windows-forbidden chars
+    .replace(/\s+/g, "_")           // spaces → underscore
+    .replace(/\.+$/g, "")           // no trailing dots
+    .slice(0, 60)                    // max length
+    .trim() || "unknown";
+}
+
 (async () => {
   const secUserId = extractSecUserId(args.account);
   const profileDir = args.profile || "./private/profiles/douyin";
   const limit = args.limit ? parseInt(args.limit, 10) : 200;
   const delay = args.delay ? parseInt(args.delay, 10) : 2000;
-  const outDir = args.out || join("./outputs", secUserId);
+  // outDir is let so we can update it to the creator's nickname after capture
+  let outDir = args.out || null;  // null = auto-detect from nickname
 
   console.log(`[douyin_skill v3.2] Collecting account: ${secUserId}`);
   console.log(`[douyin_skill v3.2] Mode: Playwright API Interceptor`);
@@ -880,6 +891,12 @@ if (!args.account) {
       totalComments: videos.reduce((sum, v) => sum + v.comments, 0),
       fetchedAt: new Date().toISOString(),
     };
+
+    // Resolve final output directory: prefer --out, then nickname, then sec_user_id
+    if (!outDir) {
+      const nickname = sanitizeName(userInfo.nickname || "");
+      outDir = join("./outputs", nickname || secUserId);
+    }
 
     // Save results
     mkdirSync(outDir, { recursive: true });
