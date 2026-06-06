@@ -16,7 +16,7 @@
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -592,6 +592,11 @@ if (!args.account) {
   console.error("  --limit     Max videos to fetch (default: 200)");
   console.error("  --delay     Request interval/scroll delay in ms (default: 2000)");
   console.error("  --out       Output directory (default: ./outputs/<account_id>)");
+  console.error("  --relogin   Clear saved login and force QR scan again");
+  console.error("");
+  console.error("切换抖音账号：");
+  console.error("  --relogin                          重新扫码（当前账号退出并重新登录）");
+  console.error("  --profile ./private/profiles/B    使用独立 profile，互不干扰");
   process.exit(1);
 }
 
@@ -605,6 +610,13 @@ if (!args.account) {
   console.log(`[douyin_skill v3.2] Collecting account: ${secUserId}`);
   console.log(`[douyin_skill v3.2] Mode: Playwright API Interceptor`);
   console.log(`[douyin_skill v3.2] limit=${limit}, delay=${delay}ms`);
+
+  // --relogin: wipe the saved browser profile to force a fresh QR scan
+  if (args.relogin) {
+    console.log(`[Browser] --relogin: clearing saved login state at ${profileDir}...`);
+    await rm(profileDir, { recursive: true, force: true });
+    console.log("[Browser] Login state cleared. You will need to scan the QR code again.");
+  }
 
   await mkdir(profileDir, { recursive: true });
 
@@ -707,7 +719,13 @@ if (!args.account) {
     }
 
     if (!capturedProfile) {
-      throw new Error("Failed to capture user profile from network responses. Please make sure you are logged in and page loads correctly.");
+      console.error("\n[错误] 无法从网络响应中捕获用户数据。");
+      console.error("  可能原因：");
+      console.error("    1. 登录状态已过期（Cookie 服务端失效）");
+      console.error("    2. 抖音账号被封禁或该页面需要登录才能查看");
+      console.error("\n  解决方法：重新登录");
+      console.error(`    node scripts/collect.mjs --account ${secUserId} --relogin`);
+      throw new Error("Failed to capture user profile. Run with --relogin to clear session and re-authenticate.");
     }
 
     // Wait an additional 12 seconds for secondary pages (like Page 2 & 3) to naturally load and fully render cards
