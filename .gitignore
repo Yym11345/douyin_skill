@@ -32,3 +32,7 @@ desktop.ini
 # Logs
 *.log
 npm-debug.log*
+
+# Excel configurations containing private account information
+*.xlsx
+~$*.xlsx

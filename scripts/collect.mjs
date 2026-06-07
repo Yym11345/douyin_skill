@@ -182,7 +182,6 @@ function generateHtmlReport(summary, videos, userInfo) {
       <td>${date}</td>
       <td>${v.duration || "—"}</td>
       <td class="num">${fmt(v.likes)}</td>
-      <td class="num">${fmt(v.views)}</td>
       <td class="num">${fmt(v.comments)}</td>
       <td class="num">${fmt(v.shares)}</td>
       <td class="num">${fmt(v.favorites)}</td>
@@ -488,10 +487,9 @@ function generateHtmlReport(summary, videos, userInfo) {
           <th onclick="sortTable(2)">发布日期 <span class="sort-icon">⇅</span></th>
           <th onclick="sortTable(3)">时长 <span class="sort-icon">⇅</span></th>
           <th onclick="sortTable(4)" class="num">点赞 <span class="sort-icon">⇅</span></th>
-          <th onclick="sortTable(5)" class="num">播放 <span class="sort-icon">⇅</span></th>
-          <th onclick="sortTable(6)" class="num">评论 <span class="sort-icon">⇅</span></th>
-          <th onclick="sortTable(7)" class="num">分享 <span class="sort-icon">⇅</span></th>
-          <th onclick="sortTable(8)" class="num">收藏 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(5)" class="num">评论 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(6)" class="num">分享 <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable(7)" class="num">收藏 <span class="sort-icon">⇅</span></th>
         </tr>
       </thead>
       <tbody id="tableBody">
@@ -528,7 +526,7 @@ function generateHtmlReport(summary, videos, userInfo) {
     if (sortCol === col) sortAsc = !sortAsc;
     else { sortCol = col; sortAsc = false; }
 
-    const colKeys = [null, 'title', 'publishedAt', 'duration', 'likes', 'views', 'comments', 'shares', 'favorites'];
+    const colKeys = [null, 'title', 'publishedAt', 'duration', 'likes', 'comments', 'shares', 'favorites'];
     const key = colKeys[col];
     const sorted = [...rawData].sort((a, b) => {
       let av = a[key], bv = b[key];
@@ -554,7 +552,6 @@ function generateHtmlReport(summary, videos, userInfo) {
         <td>\${date}</td>
         <td>\${v.duration||'—'}</td>
         <td class="num">\${fmtNum(v.likes)}</td>
-        <td class="num">\${fmtNum(v.views)}</td>
         <td class="num">\${fmtNum(v.comments)}</td>
         <td class="num">\${fmtNum(v.shares)}</td>
         <td class="num">\${fmtNum(v.favorites)}</td>
@@ -862,7 +859,6 @@ function sanitizeName(name) {
         duration: type === "video" ? formatDuration(video.duration) : "",
         isTop,
         likes: stats.digg_count ?? 0,
-        views: stats.play_count ?? 0,
         comments: stats.comment_count ?? 0,
         shares: stats.share_count ?? 0,
         favorites: stats.collect_count ?? 0,
@@ -887,7 +883,6 @@ function sanitizeName(name) {
       followers: userInfo.follower_count ?? userInfo.mplatform_followers_count ?? 0,
       videoCount: userInfo.aweme_count ?? videos.length,
       totalLikes: userInfo.total_favorited ?? videos.reduce((sum, v) => sum + v.likes, 0),
-      totalViews: videos.reduce((sum, v) => sum + v.views, 0),
       totalComments: videos.reduce((sum, v) => sum + v.comments, 0),
       fetchedAt: new Date().toISOString(),
     };
@@ -911,7 +906,7 @@ function sanitizeName(name) {
     writeFileSync(join(outDir, "videos.json"), JSON.stringify(videos, null, 2), "utf8");
 
     // CSV — include new fields
-    const csvHeader = "id,type,title,url,publishedAt,duration,isTop,likes,views,comments,shares,favorites,tags,musicTitle";
+    const csvHeader = "id,type,title,url,publishedAt,duration,isTop,likes,comments,shares,favorites,tags,musicTitle";
     const csvRows = videos.map((v) =>
       [
         v.id,
@@ -922,7 +917,6 @@ function sanitizeName(name) {
         v.duration,
         v.isTop ? "1" : "0",
         v.likes,
-        v.views,
         v.comments,
         v.shares,
         v.favorites,
@@ -947,8 +941,17 @@ function sanitizeName(name) {
     console.log(`  Posts   : ${videos.length} fetched (total: ${summary.videoCount})`);
     console.log(`  Types   : ${typeStr}`);
     console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
-    console.log(`  Views   : ${summary.totalViews.toLocaleString()}`);
+    console.log(`  Comments: ${summary.totalComments.toLocaleString()}`);
     console.log(`  Output  : ${outDir}`);
+
+    // Automatically generate/update dashboard
+    try {
+      console.log("\n[Dashboard] 正在自动更新全局监控面板...");
+      const { execSync } = await import("node:child_process");
+      execSync("node scripts/dashboard.mjs", { stdio: "inherit" });
+    } catch (dashboardErr) {
+      console.error("[Dashboard] 自动更新面板失败:", dashboardErr.message);
+    }
 
   } catch (err) {
     console.error(`[douyin_skill v3.2] Error: ${err.message}`);

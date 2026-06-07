@@ -33,10 +33,11 @@ node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 [douyin_skill v3.2] Done!
   Account : 创作者昵称 (MS4wLjABAAAA...)
   Followers: 1,234,567
-  Videos  : 200 fetched (total: 500)
+  Posts   : 200 fetched (total: 500)
+  Types   : video:198  image_text:2
   Likes   : 50,000,000
   Views   : 200,000,000
-  Output  : ./outputs/MS4wLjABAAAA...
+  Output  : ./outputs/创作者昵称
 ```
 
 ### 限制采集数量
@@ -74,6 +75,8 @@ node scripts/collect.mjs --account "账号2URL" --profile ./private/profiles/acc
 /douyin_skill MS4wLjABAAAA...
 /douyin_skill MS4wLjABAAAA... --limit 50
 /douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --delay 5000 --out ./data/today
+/douyin_skill MS4wLjABAAAA... --relogin              # 强制重新扫码
+/douyin_skill MS4wLjABAAAA... --profile ./private/profiles/B  # 多账号隔离
 ```
 
 Claude 会自动 `cd` 到本项目运行 `node scripts/collect.mjs` 并总结结果。
@@ -158,16 +161,16 @@ node scripts/collect.mjs \
 
 ### 场景 4：把 HTML 报告分享给非技术同事
 
-采集完成后：
+采集完成后（目录名是创作者昵称，已 sanitize）：
 ```bash
 # Windows
-start outputs/MS4wLjABAAAA.../report.html
+start outputs/创作者昵称/report.html
 
 # macOS
-open outputs/MS4wLjABAAAA.../report.html
+open outputs/创作者昵称/report.html
 
 # Linux
-xdg-open outputs/MS4wLjABAAAA.../report.html
+xdg-open outputs/创作者昵称/report.html
 ```
 
 `report.html` 是单文件（仅外链 Google Fonts CSS），可直接邮件 / IM 发送。
@@ -199,8 +202,12 @@ npx playwright install chromium
 `waitForLogin()` 最长等 10 分钟。如果一直卡住：
 1. 检查浏览器是否真的登录（手动刷新 douyin.com 看是否需要重登）
 2. 关闭浏览器
-3. 清除并重试：
+3. 清除并重试（两种方式二选一）：
    ```bash
+   # 推荐：使用 --relogin 自动清登录态
+   node scripts/collect.mjs --account "..." --relogin
+
+   # 或手动删除登录态目录
    rm -rf ./private/profiles/douyin
    node scripts/collect.mjs --account "..."
    ```
@@ -208,10 +215,17 @@ npx playwright install chromium
 ### 问题 4：Failed to capture user profile
 
 ```
-Error: Failed to capture user profile from network responses.
+Error: Failed to capture user profile. Run with --relogin to clear session and re-authenticate.
 ```
 
-通常是登录态失效或目标账号被风控。解决：
+通常是登录态失效或目标账号被风控。v3.2 推荐用 `--relogin` 标志：
+
+```bash
+node scripts/collect.mjs --account "..." --relogin
+```
+
+或手动：
+
 ```bash
 rm -rf ./private/profiles/douyin
 node scripts/collect.mjs --account "..."
@@ -261,29 +275,64 @@ Error: ... channel "chrome" ...
 [
   {
     "id": "7123456789012345678",
+    "type": "video",
     "title": "视频标题",
     "url": "https://www.douyin.com/video/7123456789012345678",
     "publishedAt": "2026-06-01T10:00:00+08:00",
     "duration": "03:21",
+    "isTop": false,
     "likes": 12000,
     "views": 230000,
     "comments": 321,
     "shares": 45,
     "favorites": 67,
-    "coins": 0
+    "coins": 0,
+    "coverUrl": "https://p3-sign.douyinpic.com/cover.jpeg?...",
+    "imageUrls": [],
+    "tags": ["搞笑", "日常"],
+    "musicTitle": "BGM 名字",
+    "musicAuthor": "音乐人"
   }
 ]
+```
+
+图文帖示例（`type: "image_text"`）：
+
+```json
+{
+  "id": "7123456789012345679",
+  "type": "image_text",
+  "title": "今日穿搭分享",
+  "url": "https://www.douyin.com/note/7123456789012345679",
+  "publishedAt": "2026-06-02T15:30:00+08:00",
+  "duration": "",
+  "isTop": true,
+  "likes": 8000,
+  "views": 0,
+  "comments": 120,
+  "shares": 30,
+  "favorites": 410,
+  "coins": 0,
+  "coverUrl": "https://p3-sign.douyinpic.com/cover.jpeg?...",
+  "imageUrls": [
+    "https://p3-sign.douyinpic.com/img1.jpeg?...",
+    "https://p3-sign.douyinpic.com/img2.jpeg?..."
+  ],
+  "tags": ["穿搭", "OOTD"],
+  "musicTitle": "",
+  "musicAuthor": ""
+}
 ```
 
 ### videos.csv（Excel 打开）
 
 ```
-id,title,url,publishedAt,duration,likes,views,comments,shares,favorites,coins
-7123456789012345678,"视频标题",https://www.douyin.com/video/7123456789012345678,2026-06-01T10:00:00+08:00,03:21,12000,230000,321,45,67,0
+id,type,title,url,publishedAt,duration,isTop,likes,views,comments,shares,favorites,tags,musicTitle
+7123456789012345678,video,"视频标题",https://www.douyin.com/video/7123456789012345678,2026-06-01T10:00:00+08:00,03:21,0,12000,230000,321,45,67,"搞笑 日常","BGM 名字"
 ...
 ```
 
-含 UTF-8 BOM，Excel 直接打开中文不乱码。
+含 UTF-8 BOM，Excel 直接打开中文不乱码。v3.2.1+ 起 CSV 新增 `type / isTop / tags / musicTitle` 列。
 
 ### report.html
 

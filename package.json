@@ -8,6 +8,8 @@
   },
   "scripts": {
     "collect": "node scripts/collect.mjs",
+    "collect-all": "node scripts/batch_collect.mjs",
+    "dashboard": "node scripts/dashboard.mjs",
     "setup": "npm install && npx playwright install chromium",
     "install-browser": "npx playwright install chromium"
   },
@@ -15,5 +17,8 @@
     "playwright": "^1.60.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "xlsx": "^0.18.5"
   }
 }
