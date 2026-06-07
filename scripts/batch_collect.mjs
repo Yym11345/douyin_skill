@@ -48,11 +48,17 @@ function main() {
     const name = String(row[4] || '').trim();
     if (!sec_user_id) continue;
 
+    let outputPath = String(row[8] || '').trim();
+    if (!outputPath) {
+      outputPath = `outputs/${String(row[1] || '').trim()}/${name}`;
+    }
+
     accounts.push({
       index: Number(seq),
       person: String(row[1] || '').trim(),
       name,
-      sec_user_id
+      sec_user_id,
+      outputPath
     });
   }
 
@@ -63,13 +69,12 @@ function main() {
     console.log(`\n======================================================================`);
     console.log(`[Batch] [${i + 1}/${accounts.length}] 正在采集: ${acct.name} (归属: ${acct.person})`);
     console.log(`[Batch] sec_user_id: ${acct.sec_user_id}`);
+    console.log(`[Batch] 输出目录: ${acct.outputPath}`);
     console.log(`======================================================================`);
 
     try {
-      // 执行单账号采集命令
-      // 注意：由于 collect.mjs 末尾已经追加了自动触发 dashboard.mjs，
-      // 所以每次跑完一个账号，看板 index.html 都会被自动更新。
-      execSync(`node scripts/collect.mjs --account ${acct.sec_user_id} --limit 200`, { stdio: 'inherit' });
+      // 执行单账号采集命令并指定输出目录，按负责人进行物理分类
+      execSync(`node scripts/collect.mjs --account ${acct.sec_user_id} --limit 200 --out "${acct.outputPath}"`, { stdio: 'inherit' });
     } catch (err) {
       console.error(`[Batch] 账号 ${acct.name} 采集失败:`, err.message);
     }
