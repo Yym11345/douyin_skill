@@ -263,7 +263,6 @@ Error: ... channel "chrome" ...
   "followers": 1234567,
   "videoCount": 500,
   "totalLikes": 50000000,
-  "totalViews": 200000000,
   "totalComments": 1000000,
   "fetchedAt": "2026-06-05T20:30:00.000Z"
 }
@@ -282,7 +281,6 @@ Error: ... channel "chrome" ...
     "duration": "03:21",
     "isTop": false,
     "likes": 12000,
-    "views": 230000,
     "comments": 321,
     "shares": 45,
     "favorites": 67,
@@ -308,7 +306,6 @@ Error: ... channel "chrome" ...
   "duration": "",
   "isTop": true,
   "likes": 8000,
-  "views": 0,
   "comments": 120,
   "shares": 30,
   "favorites": 410,
@@ -327,8 +324,8 @@ Error: ... channel "chrome" ...
 ### videos.csv（Excel 打开）
 
 ```
-id,type,title,url,publishedAt,duration,isTop,likes,views,comments,shares,favorites,tags,musicTitle
-7123456789012345678,video,"视频标题",https://www.douyin.com/video/7123456789012345678,2026-06-01T10:00:00+08:00,03:21,0,12000,230000,321,45,67,"搞笑 日常","BGM 名字"
+id,type,title,url,publishedAt,duration,isTop,likes,comments,shares,favorites,tags,musicTitle
+7123456789012345678,video,"视频标题",https://www.douyin.com/video/7123456789012345678,2026-06-01T10:00:00+08:00,03:21,0,12000,321,45,67,"搞笑 日常","BGM 名字"
 ...
 ```
 

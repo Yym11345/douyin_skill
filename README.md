@@ -247,6 +247,11 @@ Claude 会自动运行采集脚本、等待完成，并输出结果摘要。
 
 ---
 
+## 免责声明 (Disclaimer)
+
+使用本项目前，请务必仔细阅读 [免责声明 (DISCLAIMER.md)](file:///D:/edgedownload/ai_projects/douyin_skill/DISCLAIMER.md)。  
+本项目仅供学术研究、个人技术交流及合规运营分析使用，严禁用于任何商业牟利、非法数据转售、或突破平台风控安全机制的恶意攻击。用户因违规使用本工具而导致的任何法律责任、纠纷或经济损失，均由用户自行承担。
+
 ## License
 
 Educational use only.

@@ -1,6 +1,6 @@
 ---
 name: douyin_skill
-description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/views/comments/shares/cover/tags/music. Exports summary.json, videos.json, videos.csv, and an HTML report. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan.
+description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Exports summary.json, videos.json, videos.csv, and an HTML report. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan.
 ---
 
 # Douyin Skill (v3.2)
@@ -129,13 +129,12 @@ MS4wLjABAAAA...
   "followers": 1000000,
   "videoCount": 500,
   "totalLikes": 50000000,
-  "totalViews": 200000000,
   "totalComments": 1000000,
   "fetchedAt": "2026-06-05T10:00:00.000Z"
 }
 ```
 
-> 注意：`totalViews` 来自已采集视频的 `play_count` 之和；抖音对部分账号会返回 `play_count=0`（隐藏播放量），此时该字段为 0 属正常现象。
+> 注意：v3.2.2+ 移除了 `views` / `totalViews` 字段——抖音对部分账号 `play_count=0`（隐藏播放量），统计失真。如需播放量请直接走 `https://www.douyin.com/video/<aweme_id>` 页面。
 
 ### videos.json / videos.csv
 
@@ -151,7 +150,6 @@ MS4wLjABAAAA...
 | `duration` | 时长（MM:SS），仅视频有效；图文/直播为空字符串 |
 | `isTop` | 是否为置顶帖（`true` / `false`） |
 | `likes` | 点赞数 |
-| `views` | 播放数 |
 | `comments` | 评论数 |
 | `shares` | 分享数 |
 | `favorites` | 收藏数 |

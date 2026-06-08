@@ -78,7 +78,7 @@ douyin_skill/
 2. **视频列表**：从 `/aweme/v1/web/aweme/post/` 的 `aweme_list[]`
    - 每页 18 条，分页由抖音前端自身的 IntersectionObserver 触发
 3. **输出 schema**：跨平台一致（与 video-account-monitor 兼容）
-   - `id` / `title` / `url` / `publishedAt` / `duration` / `likes` / `views` / `comments` / `shares` / `favorites` / `coins`
+   - `id` / `title` / `url` / `publishedAt` / `duration` / `likes` / `comments` / `shares` / `favorites` / `coins`（v3.2.2+ 移除了 `views`）
 
 ## 关键技术决策
 
@@ -156,7 +156,7 @@ Options:
    - 高频采集仍可能被限流，建议账号级别 `--delay 5000+`
 2. **数据范围**
    - 仅采主页视频流，不含合集 / 直播回放
-   - 部分账号 `play_count` 被抖音隐藏（返回 0）
+   - v3.2.2+ 已移除播放数字段：抖音对部分账号隐藏 `play_count`（返回 0），统计失真。如确需播放数请走视频页 `https://www.douyin.com/video/<aweme_id>` 直接抓取。
 3. **环境**
    - 需要 Node.js 16+（ES modules + 顶级 await）
    - 需要 Chrome 浏览器（脚本 `channel: "chrome"`），或编辑代码改用 Chromium
