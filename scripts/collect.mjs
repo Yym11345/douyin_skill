@@ -15,13 +15,40 @@
  * - 支持扫码登录与验证码登录，并且断线可重连，出现滑动验证码时可人工交互解决
  */
 
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ── Helper: find existing output directory for a given sec_user_id ──────────
+// Recursively scans all summary.json files in the given base directory.
+// Returns the directory path if a matching account is found, otherwise null.
+function findExistingAccountDir(baseDir, targetSecUserId) {
+  if (!existsSync(baseDir)) return null;
+  try {
+    const entries = readdirSync(baseDir);
+    for (const entry of entries) {
+      const fullPath = join(baseDir, entry);
+      let stat;
+      try { stat = statSync(fullPath); } catch { continue; }
+      if (!stat.isDirectory()) continue;
+      const summaryPath = join(fullPath, "summary.json");
+      if (existsSync(summaryPath)) {
+        try {
+          const data = JSON.parse(readFileSync(summaryPath, "utf8"));
+          if (data.id === targetSecUserId) return fullPath;
+        } catch { /* ignore parse errors */ }
+      }
+      // Recurse one level deeper (handles outputs/<owner>/<name>/ layout)
+      const nested = findExistingAccountDir(fullPath, targetSecUserId);
+      if (nested) return nested;
+    }
+  } catch { /* ignore read errors */ }
+  return null;
+}
 
 // ── Browser Setup ─────────────────────────────────────────────────────
 
@@ -887,17 +914,34 @@ function sanitizeName(name) {
       fetchedAt: new Date().toISOString(),
     };
 
-    // Resolve final output directory: prefer --out, then nickname, then sec_user_id
+    // Resolve final output directory: prefer --out, then smart overwrite, then nickname
     if (!outDir) {
-      const nickname = sanitizeName(userInfo.nickname || "");
-      const baseName = nickname || secUserId;
-      let candidate = join("./outputs", baseName);
-      // Disambiguate when a directory with this name already exists
-      // (likely created by a different sec_user_id with the same nickname).
-      if (existsSync(candidate)) {
-        candidate = `${candidate}_${secUserId.slice(0, 12)}`;
+      // Step 1: scan all existing outputs/ subdirectories for a matching sec_user_id.
+      // This handles both flat outputs/<name>/ and organized outputs/<owner>/<name>/ layouts.
+      // If found → reuse that path (overwrite same account's data).
+      const outputsRoot = join(__dirname, "..", "outputs");
+      const existingDir = findExistingAccountDir(outputsRoot, secUserId);
+      if (existingDir) {
+        outDir = existingDir;
+        console.log(`[Output] 已找到该账号的历史数据目录：${outDir}`);
+        console.log(`[Output] 本次采集数据将直接覆盖历史数据。`);
+      } else {
+        // Step 2: new account — use nickname as directory name
+        const nickname = sanitizeName(userInfo.nickname || "");
+        const baseName = nickname || secUserId;
+        let candidate = join("./outputs", baseName);
+        // Only add suffix when the directory belongs to a DIFFERENT account (same nickname collision)
+        if (existsSync(candidate)) {
+          try {
+            const existing = JSON.parse(readFileSync(join(candidate, "summary.json"), "utf8"));
+            if (existing.id !== secUserId) {
+              candidate = `${candidate}_${secUserId.slice(0, 12)}`;
+            }
+            // If same id somehow wasn't caught above, fall through and overwrite
+          } catch { /* directory exists but no valid summary.json — overwrite */ }
+        }
+        outDir = candidate;
       }
-      outDir = candidate;
     }
 
     // Save results
