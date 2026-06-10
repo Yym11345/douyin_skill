@@ -10,7 +10,8 @@
 
 param(
     [string]$WorkspaceDir = (Get-Location).Path,
-    [string]$InstallDir   = "$HOME\douyin_skill"
+    [string]$InstallDir   = "$HOME\douyin_skill",
+    [switch]$InstallAntigravity = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,10 +82,11 @@ if ($ChromeFound) {
 
 Pop-Location
 
-# Step 4: Copy slash command to Workspace .claude/commands/
+# Step 4: Register AI Agent Integrations (Claude Code, Antigravity, Codex)
 Write-Host ""
-Write-Host "[4/4] Registering /douyin_skill command to Workspace..." -ForegroundColor Yellow
+Write-Host "[4/4] Registering AI Agent Integrations..." -ForegroundColor Yellow
 
+# 4.1 Claude Code Registration
 $CommandsDir = Join-Path $WorkspaceDir ".claude\commands"
 New-Item -ItemType Directory -Force -Path $CommandsDir | Out-Null
 
@@ -133,16 +135,46 @@ node "$InstallDirFwd/scripts/collect.mjs" `$ARGUMENTS
 $CommandFile = Join-Path $CommandsDir "douyin_skill.md"
 [System.IO.File]::WriteAllText($CommandFile, $CommandContent, [System.Text.Encoding]::UTF8)
 
-Write-Host "[OK] Command registered: $CommandFile" -ForegroundColor Green
+Write-Host "  [OK] Claude Code command registered: $CommandFile" -ForegroundColor Green
+
+# 4.2 Antigravity Registration
+if ($InstallAntigravity) {
+    $AntigravityPluginsDir = "$HOME\.gemini\config\plugins"
+    if (Test-Path "$HOME\.gemini") {
+        New-Item -ItemType Directory -Force -Path $AntigravityPluginsDir | Out-Null
+        $AntigravitySkillDir = Join-Path $AntigravityPluginsDir "douyin_skill"
+        
+        # Windows doesn't easily support symlinks without admin rights, so we create a proxy SKILL.md
+        if (!(Test-Path $AntigravitySkillDir)) {
+            New-Item -ItemType Directory -Force -Path $AntigravitySkillDir | Out-Null
+        }
+        
+        $AntigravitySkillContent = @"
+---
+name: douyin_skill
+description: Use when collecting Douyin (抖音) creator account metrics. Delegates execution to the actual tool located at $InstallDir.
+---
+# Douyin Skill (Proxy)
+This skill is installed at `$InstallDir`. Please run the scripts from there.
+"@
+        $AntigravitySkillFile = Join-Path $AntigravitySkillDir "SKILL.md"
+        [System.IO.File]::WriteAllText($AntigravitySkillFile, $AntigravitySkillContent, [System.Text.Encoding]::UTF8)
+        Write-Host "  [OK] Antigravity skill registered at: $AntigravitySkillDir" -ForegroundColor Green
+    }
+}
+
+# 4.3 Codex Notification
+Write-Host "  [OK] For Codex, point it to the SKILL.md inside $InstallDir" -ForegroundColor Green
 
 # Done
 Write-Host ""
 Write-Host " =============================================" -ForegroundColor Cyan
 Write-Host " Installation complete!" -ForegroundColor Green
 Write-Host ""
-Write-Host " In your Claude Code Workspace, type:" -ForegroundColor White
-Write-Host ""
+Write-Host " For Claude Code, type:" -ForegroundColor White
 Write-Host "   /douyin_skill https://www.douyin.com/user/MS4wLjABAAAA..." -ForegroundColor Yellow
+Write-Host ""
+Write-Host " For Antigravity, the skill 'douyin_skill' is now available globally." -ForegroundColor White
 Write-Host ""
 Write-Host " First run opens Chrome for QR login." -ForegroundColor White
 Write-Host " =============================================" -ForegroundColor Cyan

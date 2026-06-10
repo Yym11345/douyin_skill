@@ -147,16 +147,31 @@ node "$INSTALL_DIR/scripts/collect.mjs" \$ARGUMENTS
 - \`HTTP 412/403\` → 风控，建议 \`--delay 5000\`
 CMDEOF
 
-echo "[✓] 命令已注册：$COMMANDS_DIR/douyin_skill.md"
+echo "[✓] Claude Code 命令已注册：$COMMANDS_DIR/douyin_skill.md"
+
+# ── Step 5: Register to Antigravity (if present) ───────────────────────
+echo ""
+echo "[5/5] 注册 Antigravity 插件..."
+ANTIGRAVITY_PLUGINS_DIR="$HOME/.gemini/config/plugins"
+if [ -d "$HOME/.gemini" ]; then
+    mkdir -p "$ANTIGRAVITY_PLUGINS_DIR/douyin_skill"
+    # Create a symlink to the actual SKILL.md
+    ln -sf "$INSTALL_DIR/SKILL.md" "$ANTIGRAVITY_PLUGINS_DIR/douyin_skill/SKILL.md"
+    echo "[✓] Antigravity 插件已注册：$ANTIGRAVITY_PLUGINS_DIR/douyin_skill"
+else
+    echo "[i] 未检测到 Antigravity (.gemini) 环境，跳过"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
 echo " ══════════════════════════════════════════════════════"
 echo " 安装完成！"
 echo ""
-echo " 在当前 Claude Code Workspace 中直接输入："
-echo ""
+echo " 【Claude Code】在当前 Workspace 中直接输入："
 echo "   /douyin_skill https://www.douyin.com/user/MS4wLjABAAAA..."
+echo ""
+echo " 【Antigravity】此技能现在已全局可用。"
+echo " 【Codex】只需将 $INSTALL_DIR 目录指定为技能路径即可。"
 echo ""
 echo " 首次运行会打开浏览器，用抖音 App 扫码登录即可。"
 echo " ══════════════════════════════════════════════════════"

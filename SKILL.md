@@ -3,7 +3,7 @@ name: douyin_skill
 description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Exports summary.json, videos.json, videos.csv, and an HTML report. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan.
 ---
 
-# Douyin Skill (v3.2)
+# Douyin Skill (v3.3)
 
 从抖音采集创作者账号数据——粉丝数、视频列表、点赞/播放/评论/分享指标，导出 `summary.json`、`videos.json`、`videos.csv` 与一个可分享的 `report.html`。
 
@@ -21,7 +21,32 @@ macOS / Linux：
 bash <(curl -fsSL https://raw.githubusercontent.com/Yym11345/douyin_skill/master/install.sh)
 ```
 
-### 方式二：作为独立项目
+## AI 助手集成指南 (Claude / Codex / Antigravity)
+
+使用全局安装脚本（上方命令）时，脚本会自动尝试将本技能注册到您的 AI 助手环境中。
+
+### 1. Claude Code
+全局安装脚本会自动在您当前的 Workspace 目录下生成 `.claude/commands/douyin_skill.md`。安装后，直接在终端中输入 `/douyin_skill <url>` 即可调用。
+
+### 2. Antigravity (Gemini)
+安装脚本会自动在您的 `~/.gemini/config/plugins/` 目录下创建 `douyin_skill` 插件链接。安装完成后，Antigravity 将能在任何对话中发现并调用此技能。
+如果你是以独立项目形式克隆的代码，也可以手动将本项目目录注册到 Antigravity：
+```bash
+# Windows
+New-Item -ItemType Directory -Force -Path $HOME\.gemini\config\plugins\douyin_skill
+Copy-Item .\SKILL.md $HOME\.gemini\config\plugins\douyin_skill\
+
+# macOS / Linux
+mkdir -p ~/.gemini/config/plugins/douyin_skill
+ln -sf $(pwd)/SKILL.md ~/.gemini/config/plugins/douyin_skill/SKILL.md
+```
+
+### 3. Codex (及其他遵循通用技能协议的 Agent)
+对于 Codex 等支持指定本地技能目录的助手，您只需将代码库克隆后，在助手设置中将本项目的根目录指定为**自定义技能路径 (Custom Skill Path)**。Codex 会自动读取根目录下的 `SKILL.md` 并掌握如何调用该工具。
+
+---
+
+### 方式二：作为独立项目（本地开发/运行）
 
 ```bash
 cd douyin_skill
@@ -75,9 +100,9 @@ node scripts/dashboard.mjs
 | `--out` | 输出目录 | `./outputs/<创作者昵称>` |
 | `--relogin` | 清除已保存的登录态强制重新扫码 | `false` |
 
-> v3.2 已移除 `--cookie` / `--no-browser` / `--browser` 旗标。采集必须通过浏览器拦截器进行——这是它能稳定绕过风控的根本原因。
+> v3.3 已移除 `--cookie` / `--no-browser` / `--browser` 旗标。采集必须通过浏览器拦截器进行——这是它能稳定绕过风控的根本原因。
 >
-> v3.2 输出目录默认采用**创作者昵称**（经过 `sanitizeName` 处理：`\ / : * ? " < > |` 替换为空格转下划线、最长 60 字符）。若昵称为空则回退到 `sec_user_id`。
+> v3.3 输出目录默认采用**创作者昵称**（经过 `sanitizeName` 处理：`\ / : * ? " < > |` 替换为空格转下划线、最长 60 字符）。若昵称为空则回退到 `sec_user_id`。
 
 ## Account 格式
 
@@ -134,7 +159,7 @@ MS4wLjABAAAA...
 }
 ```
 
-> 注意：v3.2.2+ 移除了 `views` / `totalViews` 字段——抖音对部分账号 `play_count=0`（隐藏播放量），统计失真。如需播放量请直接走 `https://www.douyin.com/video/<aweme_id>` 页面。
+> 注意：v3.3.2+ 移除了 `views` / `totalViews` 字段——抖音对部分账号 `play_count=0`（隐藏播放量），统计失真。如需播放量请直接走 `https://www.douyin.com/video/<aweme_id>` 页面。
 
 ### videos.json / videos.csv
 
@@ -160,7 +185,7 @@ MS4wLjABAAAA...
 | `musicTitle` | 背景音乐标题 |
 | `musicAuthor` | 背景音乐作者 |
 
-> v3.2.1 起 CSV 列同步增加 `type, isTop, tags, musicTitle`，并补 UTF-8 BOM 确保 Excel 打开不乱码。
+> v3.3.1 起 CSV 列同步增加 `type, isTop, tags, musicTitle`，并补 UTF-8 BOM 确保 Excel 打开不乱码。
 
 ### report.html
 
@@ -205,7 +230,7 @@ npx playwright install chromium
 通常是**登录态失效**或目标账号已被限制。解决（两种方式二选一）：
 
 ```bash
-# 方式一：使用 --relogin 标志（v3.2 推荐，会自动清理登录态并强制重扫码）
+# 方式一：使用 --relogin 标志（v3.3 推荐，会自动清理登录态并强制重扫码）
 node scripts/collect.mjs --account "..." --relogin
 
 # 方式二：手动删除登录态目录
@@ -258,7 +283,7 @@ douyin_skill/
 ├── private/profiles/douyin/          # 浏览器登录态（自动生成，git 忽略）
 ├── outputs/<昵称>/                   # 采集结果（自动生成，git 忽略）
 └── scripts/
-    ├── collect.mjs                   # v3.2 主入口（拦截器 + HTML 报告）
+    ├── collect.mjs                   # v3.3 主入口（拦截器 + HTML 报告）
     └── adapters/
         ├── stealth.min.js            # 反检测注入脚本
         ├── douyin.mjs                # 旧版 HTTP 适配器（v2.x，已不被 collect.mjs 引用，保留供参考）

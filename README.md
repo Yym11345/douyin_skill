@@ -1,6 +1,6 @@
 # douyin-skill
 
-> 抖音创作者数据采集工具 · v3.2 · 浏览器原生网络拦截，无需 API 签名
+> 抖音创作者数据采集工具 · v3.3 · 浏览器原生网络拦截，无需 API 签名
 
 **无需破解，无需 Cookie 手动导入** — 工具通过 Playwright 控制真实浏览器，监听抖音自身前端发出的 API 请求，然后解析并导出数据。
 
@@ -186,7 +186,7 @@ douyin_skill/
 ├── setup.sh                # macOS/Linux 一键安装
 ├── package.json
 ├── scripts/
-│   ├── collect.mjs         # 主程序（v3.2）
+│   ├── collect.mjs         # 主程序（v3.3）
 │   └── adapters/
 │       └── stealth.min.js  # 反检测脚本
 ├── private/                # 浏览器 Profile（gitignored）
@@ -195,55 +195,30 @@ douyin_skill/
 
 ---
 
-## 在 Claude Code 中使用 `/douyin_skill` 命令
+## AI 助手集成指南 (Claude Code / Codex / Antigravity)
 
-如果你使用 [Claude Code](https://claude.ai/code)，可以通过 `/douyin_skill` 命令一键调用。
+使用全局安装脚本（方式一）时，脚本会自动尝试将本技能注册到您的 AI 助手环境中。如果您使用独立项目（方式二），也可以手动配置：
 
-> **重要**：Slash command 从当前 Workspace 的 `.claude/commands/` 目录加载，  
-> 所以必须先将本项目目录**设置为 Claude Code 的 Workspace**，命令才会生效。
+### 1. Claude Code
+全局安装脚本会自动在您当前的 Workspace 目录下生成 `.claude/commands/douyin_skill.md`。安装后，直接在终端中输入 `/douyin_skill <url>` 即可调用。
+> 如果没有使用全局安装脚本，请手动将克隆的 `douyin_skill` 目录设置为 Claude Code 的 Workspace 才能使用斜杠命令。
 
-### 完整启用步骤
+### 2. Antigravity (Gemini)
+全局安装脚本会自动在您的 `~/.gemini/config/plugins/` 目录下创建 `douyin_skill` 插件链接。安装完成后，Antigravity 将能在任何对话中发现并直接调用此技能。
 
-**第一步：克隆并安装**
+如果手动安装，可以执行以下命令链接：
 ```bash
-git clone https://github.com/Yym11345/douyin_skill.git
-cd douyin_skill
-setup.bat        # Windows
-# 或
-./setup.sh       # macOS / Linux
+# Windows
+New-Item -ItemType Directory -Force -Path $HOME\.gemini\config\plugins\douyin_skill
+Copy-Item .\SKILL.md $HOME\.gemini\config\plugins\douyin_skill\
+
+# macOS / Linux
+mkdir -p ~/.gemini/config/plugins/douyin_skill
+ln -sf $(pwd)/SKILL.md ~/.gemini/config/plugins/douyin_skill/SKILL.md
 ```
 
-**第二步：在 Claude Code 中设置 Workspace**
-
-打开 Claude Code → 点击左侧文件夹图标 → 选择 `douyin_skill` 目录 → 设为当前 Workspace
-
-✅ 设置成功后，输入 `/` 即可在列表中看到 `douyin_skill` 命令。
-
-**第三步：直接使用**
-
-```
-/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA...
-```
-
-支持所有参数：
-
-```
-/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --limit 500
-/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --relogin
-/douyin_skill https://www.douyin.com/user/MS4wLjABAAAA... --profile ./private/profiles/account_B
-```
-
-Claude 会自动运行采集脚本、等待完成，并输出结果摘要。
-
-### 没有设置 Workspace 能用吗？
-
-❌ **不能**。如果没有设置 Workspace，Claude Code 不会加载 `.claude/commands/` 目录，`/douyin_skill` 命令不会出现在列表中。
-
-| 状态 | `/douyin_skill` 可用？ |
-|------|----------------------|
-| 已设置 douyin_skill 为 Workspace | ✅ 可用 |
-| 未设置 Workspace | ❌ 不可用 |
-| 仅在 GitHub 上查看代码 | ❌ 不可用 |
+### 3. Codex (及其他遵循通用技能协议的 Agent)
+对于 Codex 等支持指定本地技能目录的助手，您只需在助手设置中将本项目的根目录指定为**自定义技能路径 (Custom Skill Path)**。Codex 会自动读取根目录下的 `SKILL.md` 并掌握如何调用该工具。
 
 ---
 

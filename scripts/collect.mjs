@@ -15,7 +15,7 @@
  * - 支持扫码登录与验证码登录，并且断线可重连，出现滑动验证码时可人工交互解决
  */
 
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync, renameSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -960,9 +960,28 @@ function sanitizeName(name) {
     if (wb.SheetNames.includes(videoSheetName)) wb.Sheets[videoSheetName] = newVideoWs;
     else XLSX.utils.book_append_sheet(wb, newVideoWs, videoSheetName);
 
-    // Write back to file
+    // ── Atomic Write: write to temp file first, then rename ──────────────
+    // This prevents data loss if Excel is open or a crash occurs mid-write.
     mkdirSync(join(__dirname, "..", "outputs"), { recursive: true });
-    XLSX.writeFile(wb, excelPath);
+    const tempPath = excelPath + ".tmp";
+    try {
+      XLSX.writeFile(wb, tempPath);
+      // Only replace the real file after the temp write succeeds
+      if (existsSync(excelPath)) renameSync(excelPath, excelPath + ".bak");
+      renameSync(tempPath, excelPath);
+      // Remove backup once confirmed successful
+      if (existsSync(excelPath + ".bak")) {
+        try { require('node:fs').unlinkSync(excelPath + ".bak"); } catch(_) {}
+      }
+    } catch (writeErr) {
+      // Clean up temp file on failure
+      try { require('node:fs').unlinkSync(tempPath); } catch(_) {}
+      throw new Error(
+        `[写入失败] Excel 文件写入失败，数据已安全保留在原文件中。\n` +
+        `原因：${writeErr.message}\n` +
+        `提示：请关闭 Excel 中已打开的 Douyin_All_Data.xlsx 后重试。`
+      );
+    }
 
     // Summary
     const typeCount = {};
@@ -988,7 +1007,7 @@ function sanitizeName(name) {
     }
 
   } catch (err) {
-    console.error(`[douyin_skill v3.2] Error: ${err.message}`);
+    console.error(`[douyin_skill v3.3] Error: ${err.message}`);
     process.exit(1);
   } finally {
     if (context) await context.close();

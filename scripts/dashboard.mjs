@@ -2,11 +2,14 @@
 /**
  * scripts/dashboard.mjs
  * 
- * 读取 账号监控_人员分组.xlsx 与 outputs/ 目录下的所有 summary.json & videos.json，
- * 按照 VAM 团队监控矩阵的“维护提醒”规则与 UI 风格，生成 outputs/index.html 监控面板。
+ * 读取 outputs/Douyin_All_Data.xlsx
+ * 生成多级可视化的 Chart.js / HTML 看板:
+ * - outputs/index.html (全局总看板)
+ * - outputs/person_dashboards/*.html (个人详细看板)
+ * - outputs/leader_dashboards/*.html (组长管理看板)
  */
 
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -18,135 +21,61 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, '..');
 const outputsDir = join(projectRoot, 'outputs');
-const excelPath = join(projectRoot, '账号监控_人员分组.xlsx');
-// 格式化展示的粉丝/赞数/比率
-function formatCount(num) {
-  num = Number(num) || 0;
-  if (num >= 10000) {
-    return (num / 10000).toFixed(1).replace(/\.0$/, '') + 'w';
+const personDashboardsDir = join(outputsDir, 'person_dashboards');
+const leaderDashboardsDir = join(outputsDir, 'leader_dashboards');
+
+if (!existsSync(personDashboardsDir)) mkdirSync(personDashboardsDir, { recursive: true });
+if (!existsSync(leaderDashboardsDir)) mkdirSync(leaderDashboardsDir, { recursive: true });
+
+// ── 动态加载团队组织架构配置 ─────────────────────────────────────────
+// 从 config/team.json 读取。首次使用请复制 config/team.example.json 并按实际组织层级修改。
+const teamConfigPath = join(projectRoot, 'config', 'team.json');
+let TEAM_HIERARCHY = {};
+
+if (existsSync(teamConfigPath)) {
+  try {
+    const raw = JSON.parse(readFileSync(teamConfigPath, 'utf8'));
+    TEAM_HIERARCHY = raw.teams || {};
+    console.log(`[Dashboard] 已加载团队配置: ${Object.keys(TEAM_HIERARCHY).length} 位组长`);
+  } catch (e) {
+    console.warn(`[Dashboard] ⚠️ config/team.json 解析失败: ${e.message}`);
+    console.warn('[Dashboard] 将跳过组长看板生成，请检查 JSON 格式。');
   }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
-  }
-  return String(num);
+} else {
+  console.warn('[Dashboard] ⚠️ 未找到 config/team.json，将不生成组长看板。');
+  console.warn('[Dashboard] 请复制 config/team.example.json -> config/team.json 并配置您的团队人员架构。');
 }
 
-// 维护提醒规则分类
-function classifyVideo(likes, comments) {
-  likes = Number(likes) || 0;
-  comments = Number(comments) || 0;
-
-  // Global classification category
-  let globalCategory = 'ok';
-  if (likes <= 10) {
-    globalCategory = 'muted';
-  } else if (likes > 500) {
-    if (comments >= 50) globalCategory = 'ok';
-    else if (comments < 10) globalCategory = 'critical';
-    else if (comments < 25) globalCategory = 'warning';
-    else globalCategory = 'caution';
-  } else {
-    const ratio = comments / likes;
-    if (ratio >= 0.1) globalCategory = 'ok';
-    else if (ratio < 0.02) globalCategory = 'critical';
-    else if (ratio < 0.05) globalCategory = 'warning';
-    else globalCategory = 'caution';
-  }
-
-  // UI representation (row styling)
-  let level = 'ok';
-  let severity = 1;
-  let label = '正常';
-  let color = '#1ec98b';
-  let ratioText = '';
-  let needsMaintenance = false;
-
-  if (likes === 0) {
-    level = 'nodata';
-    severity = 0;
-    label = '无数据';
-    color = '#525c70';
-    ratioText = '–';
-    needsMaintenance = false;
-  } else if (likes <= 10) {
-    const ratio = comments / likes;
-    level = 'ok';
-    severity = 1;
-    label = '正常';
-    color = '#1ec98b';
-    ratioText = `${(ratio * 100).toFixed(0)}%`;
-    needsMaintenance = false;
-  } else if (likes > 500) {
-    ratioText = formatCount(comments);
-    if (comments >= 50) {
-      level = 'ok';
-      severity = 1;
-      label = '正常';
-      color = '#1ec98b';
-      needsMaintenance = false;
-    } else if (comments < 10) {
-      level = 'critical';
-      severity = 4;
-      label = '极低';
-      color = '#f04352';
-      needsMaintenance = true;
-    } else if (comments < 25) {
-      level = 'warning';
-      severity = 3;
-      label = '很低';
-      color = '#f97316';
-      needsMaintenance = true;
-    } else {
-      level = 'caution';
-      severity = 2;
-      label = '偏低';
-      color = '#f5a623';
-      needsMaintenance = true;
-    }
-  } else {
-    // 10 < likes <= 500
-    const ratio = comments / likes;
-    ratioText = `${(ratio * 100).toFixed(0)}%`;
-    if (ratio >= 0.1) {
-      level = 'ok';
-      severity = 1;
-      label = '正常';
-      color = '#1ec98b';
-      needsMaintenance = false;
-    } else if (ratio < 0.02) {
-      level = 'critical';
-      severity = 4;
-      label = '极低';
-      color = '#f04352';
-      needsMaintenance = true;
-    } else if (ratio < 0.05) {
-      level = 'warning';
-      severity = 3;
-      label = '很低';
-      color = '#f97316';
-      needsMaintenance = true;
-    } else {
-      level = 'caution';
-      severity = 2;
-      label = '偏低';
-      color = '#f5a623';
-      needsMaintenance = true;
-    }
-  }
-
-  return {
-    level,
-    severity,
-    label,
-    color,
-    ratioText,
-    needsMaintenance,
-    globalCategory
-  };
+// 工具函数：近15天判定
+function isWithin15Days(dateStr) {
+    if (!dateStr) return false;
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffTime = Math.abs(now - date);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays <= 15;
 }
 
+// 工具函数：获取预期的评论数目标
+function getTargetComments(likes) {
+    if (likes < 10) return 1;
+    if (likes < 50) return 2;
+    if (likes < 100) return 4;
+    if (likes < 500) return 5;
+    if (likes < 1000) return 10;
+    return 15;
+}
 
-// 从单一 Excel 数据库文件读取数据
+// 工具函数： HTML 转义（防止 XSS 和 HTML 属性破坏）
+function htmlEscape(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function loadDatabaseData() {
   const summaryMap = new Map();
   const videosMap = new Map();
@@ -172,857 +101,928 @@ function loadDatabaseData() {
   return { summaryMap, videosMap };
 }
 
-function main() {
-  console.log('[Dashboard] 开始读取数据并生成 VAM 团队监控矩阵...');
+function generatePersonHtml(person, accounts, videos, updateTime) {
+    // 聚合人员级别的数据
+    const totalAccounts = accounts.length;
+    const totalVideos = accounts.reduce((acc, a) => acc + (Number(a.data.videoCount) || videos.filter(v=>String(v.account_id)===String(a.data.id)).length), 0);
+    const totalFollowers = accounts.reduce((acc, a) => acc + (Number(a.data.followers) || 0), 0);
+    const totalLikes = videos.reduce((acc, v) => acc + (Number(v.likes) || 0), 0);
+    const totalComments = videos.reduce((acc, v) => acc + (Number(v.comments) || 0), 0);
 
-  // 1. 读取采集到的数据库 (Excel版)
-  const { summaryMap, videosMap } = loadDatabaseData();
+    let l15Videos = 0;
+    let l15Maint = 0;
+    let l15MissingCmts = 0;
+    let allMaint = 0;
 
-  // 2. 读取 Excel 配置文件
-  if (!existsSync(excelPath)) {
-    console.error(`[Error] 找不到 Excel 文件: ${excelPath}`);
-    process.exit(1);
-  }
+    const tiers = [
+        { label: "10赞内", color: "#2e7d32", icon: "🟢", max: 10, vids: [] },
+        { label: "50赞内", color: "#1565c0", icon: "🔵", max: 50, vids: [] },
+        { label: "100赞内", color: "#f57f17", icon: "🟡", max: 100, vids: [] },
+        { label: "500赞内", color: "#d84315", icon: "🟠", max: 500, vids: [] },
+        { label: "1000赞内", color: "#c62828", icon: "🔴", max: 1000, vids: [] },
+        { label: "1000赞以上", color: "#6a1b9a", icon: "🟣", max: Infinity, vids: [] },
+    ];
 
-  const wb = XLSX.readFile(excelPath);
-  const sheetName = '按人分组';
-  if (!wb.SheetNames.includes(sheetName)) {
-    console.error(`[Error] Excel 中找不到工作表: ${sheetName}`);
-    process.exit(1);
-  }
+    videos.forEach(v => {
+        const likes = Number(v.likes) || 0;
+        const comments = Number(v.comments) || 0;
+        const targetComments = getTargetComments(likes);
+        const isMaint = comments < targetComments;
+        const isL15 = isWithin15Days(v.publishedAt);
+        const accountName = accounts.find(a => String(a.data.id) === String(v.account_id))?.data.name || "未知账号";
 
-  const ws = wb.Sheets[sheetName];
-  const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 });
-  
-  const excelAccounts = [];
-  for (const row of rawData) {
-    if (!row || row.length < 5) continue;
-    const seq = row[0];
-    if (seq === null || seq === undefined || isNaN(Number(seq))) continue;
-    if (Number(seq) <= 0) continue;
+        if (isL15) {
+            l15Videos++;
+            if (isMaint) l15Maint++;
+            if (comments < targetComments) l15MissingCmts += (targetComments - comments);
+        }
+        if (isMaint) allMaint++;
 
-    const sec_user_id = String(row[3] || '').trim();
-    if (!sec_user_id) continue;
-
-    excelAccounts.push({
-      index: Number(seq),
-      person: String(row[1] || '').trim(),
-      url: String(row[2] || '').trim(),
-      sec_user_id,
-      name: String(row[4] || '').trim(),
-      excelFollowers: Number(row[5]) || 0,
-      excelLikes: Number(row[6]) || 0,
-      excelComments: Number(row[7]) || 0,
-      outputPath: String(row[8] || '').trim()
-    });
-  }
-
-  // 全局分类计数器
-  const globalAlerts = {
-    critical: 0,  // 极低
-    warning: 0,   // 很低
-    caution: 0,   // 偏低
-    ok: 0,        // 正常
-    muted: 0      // 基数小
-  };
-
-  let totalVideosCount = 0;
-  let totalNeedsMaintenance = 0;
-
-    // 3. 关联并分析视频明细
-    const finalAccounts = excelAccounts.map(acct => {
-    // 通过 sec_user_id 匹配
-    let match = summaryMap.get(acct.sec_user_id);
-    
-    const realData = match ? match.data : null;
-    let videos = match ? (videosMap.get(acct.sec_user_id) || []) : [];
-    let isCollected = !!match;
-
-    // 分析所有视频并判定评级
-    let needsMaintenanceCount = 0;
-    const analyzedVideos = videos.map(v => {
-      const classification = classifyVideo(v.likes, v.comments);
-      
-      // 累加全局统计
-      if (classification.globalCategory === 'critical') globalAlerts.critical++;
-      else if (classification.globalCategory === 'warning') globalAlerts.warning++;
-      else if (classification.globalCategory === 'caution') globalAlerts.caution++;
-      else if (classification.globalCategory === 'ok') globalAlerts.ok++;
-      else if (classification.globalCategory === 'muted') globalAlerts.muted++;
-
-      if (classification.needsMaintenance) {
-        needsMaintenanceCount++;
-        totalNeedsMaintenance++;
-      }
-      totalVideosCount++;
-
-      return {
-        id: v.id,
-        type: v.type || 'video',
-        title: v.title || '(无标题)',
-        url: v.url || '#',
-        likes: v.likes || 0,
-        comments: v.comments || 0,
-        level: classification.level,
-        severity: classification.severity,
-        color: classification.color,
-        ratioText: classification.ratioText,
-        needsMaintenance: classification.needsMaintenance
-      };
+        const vidObj = { ...v, accountName, isMaint, isL15, targetComments };
+        for (const tier of tiers) {
+            if (likes <= tier.max) {
+                tier.vids.push(vidObj);
+                break;
+            }
+        }
     });
 
-    // 对该账号 of 视频进行排序：严重级别高（severity 降序）优先，其次按点赞数（likes 降序）
-    analyzedVideos.sort((a, b) => {
-      if (b.severity !== a.severity) return b.severity - a.severity;
-      return b.likes - a.likes;
+    let tiersHtml = '';
+    let tiersContentHtml = '';
+
+    tiers.forEach(tier => {
+        const okCount = tier.vids.filter(v => !v.isMaint).length;
+        const warnCount = tier.vids.filter(v => v.isMaint).length;
+        const l15MaintCount = tier.vids.filter(v => v.isMaint && v.isL15).length;
+
+        tiersHtml += `<div class="tier-card" style="border-top:3px solid ${tier.color};"><div class="icon">${tier.icon}</div><div class="count" style="color:${tier.color};">${tier.vids.length}</div><div class="label" style="color:${tier.color};">${tier.label}</div><div class="sub">✅${okCount} ⚠️${warnCount}</div></div>`;
+
+        // Sort videos: Maint first, then newest
+        tier.vids.sort((a, b) => {
+            if (a.isMaint && !b.isMaint) return -1;
+            if (!a.isMaint && b.isMaint) return 1;
+            const aDate = a.publishedAt || '';
+            const bDate = b.publishedAt || '';
+            return bDate.localeCompare(aDate);
+        });
+
+        let rowsHtml = tier.vids.map((v, i) => {
+            const pubDate = (v.publishedAt || '').slice(0, 10);
+            const safeTitle = htmlEscape(v.title || '');
+            const shortTitle = htmlEscape((v.title || '').slice(0, 40));
+            return `<tr class="${v.isMaint ? 'row-maint' : ''}"><td class="num">${i+1}</td><td>${v.isMaint ? '<span class="badge-maint">⚠️ 待维护</span>' : '<span class="badge-ok">✅ 达标</span>'}</td><td>${htmlEscape(v.accountName)}</td><td><a href="${v.url || '#'}" target="_blank" title="${safeTitle}">${shortTitle}${(v.title||'').length > 40 ? '...' : ''}</a></td><td class="num">${v.likes}</td><td class="num">${v.comments} ${v.isMaint ? `<em>/${v.targetComments}</em>` : ''}</td><td>${pubDate}</td></tr>`;
+        }).join('\n');
+
+        tiersContentHtml += `
+    <div class="tier-panel">
+    <div class="tier-header">
+        <span class="tier-icon">${tier.icon}</span>
+        <span class="tier-label" style="color:${tier.color};">${tier.label}</span>
+        <span class="tier-pill tier-pill-maint">⚠️ 15天待维护 ${l15MaintCount}</span>
+        <span class="tier-pill tier-pill-total">共 ${tier.vids.length} 条</span>
+    </div>
+    <div class="tier-strips"><table class="sortable tier-table"><thead><tr><th class="num">#</th><th class="no-sort">状态</th><th>账号</th><th>标题</th><th class="num">点赞</th><th class="num">评论</th><th>日期</th></tr></thead><tbody>
+    ${rowsHtml}
+    </tbody></table></div></div>`;
     });
 
-    // 确定当前账号创作者卡片的严重级别
-    let creatorLevel = 'level-ok';
-    const severities = analyzedVideos.map(v => v.level);
-    if (severities.includes('critical')) creatorLevel = 'level-critical';
-    else if (severities.includes('warning')) creatorLevel = 'level-warning';
-    else if (severities.includes('caution')) creatorLevel = 'level-caution';
-    else if (!isCollected) creatorLevel = 'missing';
-
-    // 取前 5 个视频展示
-    const topVideos = analyzedVideos.slice(0, 5);
-    const moreVideosCount = analyzedVideos.length > 5 ? (analyzedVideos.length - 5) : 0;
-
-    // 总粉丝、赞数、评论数
-    const followers = realData ? (realData.followers || 0) : acct.excelFollowers;
-    const likes = realData ? (realData.totalLikes || 0) : acct.excelLikes;
-    const comments = realData ? (realData.totalComments || 0) : acct.excelComments;
-
-    // 格式化展示的粉丝/赞数/比率
-    const ratioStr = likes > 0 ? ((comments / likes) * 100).toFixed(1) + '%' : '0.0%';
-
-    // 计算 reportUrl (现统一跳往抖音主页)
-    let reportUrl = realData ? realData.url : acct.url;
-
-    return {
-      index: acct.index,
-      person: acct.person,
-      sec_user_id: acct.sec_user_id,
-      name: realData && realData.name ? realData.name : acct.name,
-      followers,
-      likes,
-      comments,
-      ratioStr,
-      videoCount: analyzedVideos.length,
-      needsMaintenanceCount,
-      creatorLevel,
-      topVideos,
-      moreVideosCount,
-      isCollected,
-      reportUrl
-    };
-  });
-
-  // 4. 按负责人 (owner) 进行分组
-  const ownerMap = new Map();
-  for (const acct of finalAccounts) {
-    if (!ownerMap.has(acct.person)) {
-      ownerMap.set(acct.person, {
-        name: acct.person,
-        creators: [],
-        totalVideos: 0,
-        needsMaintenance: 0
-      });
-    }
-    const owner = ownerMap.get(acct.person);
-    owner.creators.push(acct);
-    owner.totalVideos += acct.videoCount;
-    owner.needsMaintenance += acct.needsMaintenanceCount;
-  }
-
-  // 针对每个负责人的创作者进行排序：严重程度降序 -> 待维护数降序 -> 粉丝数降序
-  for (const owner of ownerMap.values()) {
-    owner.creators.sort((a, b) => {
-      const getSeverity = (level) => {
-        if (level === 'level-critical') return 4;
-        if (level === 'level-warning') return 3;
-        if (level === 'level-caution') return 2;
-        if (level === 'level-ok') return 1;
-        return 0; // missing
-      };
-      const sevA = getSeverity(a.creatorLevel);
-      const sevB = getSeverity(b.creatorLevel);
-      if (sevB !== sevA) return sevB - sevA;
-      if (b.needsMaintenanceCount !== a.needsMaintenanceCount) {
-        return b.needsMaintenanceCount - a.needsMaintenanceCount;
-      }
-      return b.followers - a.followers;
-    });
-  }
-
-  // 负责人排序：按需要维护的视频数降序排列，以便管理者第一眼看到需要行动的人员
-  const sortedOwners = Array.from(ownerMap.values()).sort((a, b) => {
-    if (b.needsMaintenance !== a.needsMaintenance) return b.needsMaintenance - a.needsMaintenance;
-    return b.totalVideos - a.totalVideos;
-  });
-
-  const collectedCount = finalAccounts.filter(a => a.isCollected).length;
-  const missingCount = finalAccounts.length - collectedCount;
-  const missingAccounts = finalAccounts.filter(a => !a.isCollected);
-
-  // 5. 组装并生成 HTML 页面
-  const htmlContent = generateMatrixHtml({
-    generatedAt: new Date().toISOString(),
-    totalPeople: sortedOwners.length,
-    totalCreators: finalAccounts.length,
-    collectedCount,
-    missingCount,
-    totalVideosCount,
-    totalNeedsMaintenance,
-    globalAlerts,
-    owners: sortedOwners,
-    missingAccounts
-  });
-
-  const destPath = join(outputsDir, 'index.html');
-  writeFileSync(destPath, htmlContent, 'utf8');
-  console.log(`[Dashboard] 成功生成矩阵监控面板: ${destPath}`);
-}
-
-function generateMatrixHtml(data) {
-  const timeStr = new Date(data.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-
-  // 渲染负责人板块
-  const ownerBoardsHtml = data.owners.map(owner => {
-    const creatorCardsHtml = owner.creators.map(c => {
-      if (!c.isCollected) {
-        return `
-          <article class="creator-card missing">
-            <div class="cc-header">
-              <span class="cc-name">${c.name}</span>
-              <span class="cc-status missing">未找到</span>
-            </div>
-            <div class="cc-empty">outputs/ 中无此账号</div>
-          </article>
-        `;
-      }
-
-      // 渲染该账号的前 5 个视频行
-      const videoRowsHtml = c.topVideos.map(v => {
-        const typeClass = v.type === 'image_text' ? 'badge type-img' : 'badge type-vid';
-        const typeLabel = v.type === 'image_text' ? '图文' : '视频';
-        const rowLevelClass = `vrow level-${v.level}`;
-        const fmtLikes = formatCount(v.likes);
-        const fmtComments = formatCount(v.comments);
-
-        return `
-          <a href="${v.url}" target="_blank" rel="noopener noreferrer" class="${rowLevelClass}">
-            <span class="vrow-light" style="background:${v.color}">${v.ratioText}</span>
-            <span class="vrow-title" title="${v.title}">${v.title}</span>
-            <span class="vrow-meta">${fmtLikes}赞 / ${fmtComments}评</span>
-            <span class="vrow-type ${typeClass}">${typeLabel}</span>
-          </a>
-        `;
-      }).join('');
-
-      const fmtCreatorLikes = formatCount(c.likes);
-      const fmtCreatorComments = formatCount(c.comments);
-
-      return `
-        <article class="creator-card ${c.creatorLevel}">
-          <div class="cc-header">
-            <a href="${c.reportUrl}" target="_blank" class="cc-name" title="查看数据详情">${c.name}</a>
-            <span class="cc-id">@${c.sec_user_id.slice(0, 8)}...</span>
-          </div>
-          <div class="cc-stats">
-            <span class="cc-stat"><b>${c.videoCount}</b> 视频</span>
-            <span class="cc-stat"><b>${fmtCreatorLikes}</b> 赞</span>
-            <span class="cc-stat"><b>${fmtCreatorComments}</b> 评</span>
-            <span class="cc-stat"><b>${c.ratioStr}</b> 比率</span>
-          </div>
-          <div class="cc-videos">
-            ${videoRowsHtml}
-            ${c.moreVideosCount > 0 ? `<div class="cc-more">+${c.moreVideosCount} 更多…</div>` : ''}
-            ${c.videoCount === 0 ? '<div class="cc-empty">账号内暂无采集视频</div>' : ''}
-          </div>
-        </article>
-      `;
-    }).join('');
-
-    const alertBadgeHtml = owner.needsMaintenance > 0 
-      ? `<span class="alert-badge">${owner.needsMaintenance} 需维护</span>` 
-      : `<span class="ok-badge">正常</span>`;
-
-    return `
-      <section class="owner-board">
-        <div class="owner-header">
-          <span class="owner-name">👤 ${owner.name}</span>
-          <span class="owner-stats">
-            ${owner.creators.length} 创作者 · ${owner.totalVideos} 视频
-            ${alertBadgeHtml}
-          </span>
-        </div>
-        <div class="creator-grid">
-          ${creatorCardsHtml}
-        </div>
-      </section>
-    `;
-  }).join('');
-
-  // 渲染缺失创作者的警告栏
-  const warningsHtml = data.missingCount > 0
-    ? `
-      <div class="warnings">
-        <div class="warnings-title">⚠️ 缺失创作者 (${data.missingCount})</div>
-        <div class="warnings-text">
-          以下账号未在 outputs/ 目录找到采集数据（可能未采集或拼写不匹配）：
-          ${data.missingAccounts.map(a => `<b>${a.name} (${a.person})</b>`).join('，')}
-        </div>
-      </div>
-    `
-    : '';
-
-  return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VAM 团队监控矩阵 · ${data.totalPeople} 人 · ${data.totalNeedsMaintenance} 待维护</title>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${person} - 抖音视频分级监控看板</title>
 <style>
-  * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    margin: 0;
-    background: #070b14;
-    color: #e9ecf2;
-    font-size: 14px;
-    line-height: 1.4;
-    -webkit-font-smoothing: antialiased;
-    padding-bottom: 50px;
-  }
-  
-  :root {
-    --bg-root: #070b14;
-    --bg-primary: #0a0f1c;
-    --bg-secondary: #0f1629;
-    --bg-tertiary: #161f3a;
-    --bg-elevated: #1a2445;
-    --bg-hover: #1e2a4f;
-    --border: rgba(255,255,255,.06);
-    --border-strong: rgba(255,255,255,.10);
-    --border-accent: rgba(0,217,255,.18);
-    --text-primary: #e9ecf2;
-    --text-secondary: #8b95a8;
-    --text-muted: #525c70;
-    --text-high: #f4f6fa;
-    --accent: #00d9ff;
-    --accent-glow: rgba(0,217,255,.35);
-    --accent-dim: rgba(0,217,255,.10);
-    --radius-sm: 3px;
-    --radius-md: 5px;
-  }
-
-  body::before {
-    content: "";
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 9999;
-    height: 1px;
-    background: linear-gradient(90deg, transparent 0%, var(--accent) 20%, var(--accent-glow) 50%, var(--accent) 80%, transparent 100%);
-    box-shadow: 0 0 10px var(--accent-glow), 0 0 30px var(--accent-glow);
-    pointer-events: none;
-  }
-
-  .vam-header {
-    position: relative;
-    background: radial-gradient(ellipse 120% 300% at 15% 0%, rgba(0,217,255,.07) 0%, transparent 60%), linear-gradient(180deg, #0d1428 0%, var(--bg-primary) 100%);
-    border-bottom: 1px solid var(--border-strong);
-    padding: 14px 24px;
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    flex-wrap: wrap;
-  }
-
-  .vam-brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .vam-logo {
-    color: var(--accent);
-    font-size: 22px;
-    text-shadow: 0 0 10px var(--accent-glow), 0 0 20px var(--accent-glow);
-    filter: drop-shadow(0 0 6px var(--accent-glow));
-  }
-
-  .vam-title {
-    font-size: 17px;
-    font-weight: 700;
-    letter-spacing: .08em;
-    color: var(--text-high);
-  }
-
-  .vam-stats {
-    display: flex;
-    gap: 0;
-    flex: 1;
-  }
-
-  .vam-stats .stat {
-    display: flex;
-    flex-direction: column;
-    padding: 6px 16px;
-    border-right: 1px solid var(--border);
-    min-width: 90px;
-  }
-
-  .vam-stats .stat:last-child {
-    border-right: none;
-  }
-
-  .vam-stats .k {
-    font-size: 10px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    margin-bottom: 3px;
-  }
-
-  .vam-stats .v {
-    font-size: 20px;
-    font-weight: 700;
-    font-family: monospace;
-    color: var(--text-high);
-    line-height: 1.1;
-  }
-
-  .vam-stats .v-sm {
-    font-size: 13px;
-  }
-
-  .vam-stats .v-alert {
-    color: #f04352;
-    text-shadow: 0 0 8px rgba(240,67,82,.4);
-  }
-
-  .vam-meta {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: monospace;
-    margin-left: auto;
-    opacity: .7;
-  }
-
-  main {
-    padding: 16px 24px 20px;
-    max-width: 1840px;
-    margin: 0 auto;
-  }
-
-  section {
-    margin-bottom: 18px;
-  }
-
-  .section-title {
-    font-size: 13px;
-    color: var(--text-high);
-    font-weight: 600;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    letter-spacing: .03em;
-  }
-
-  .section-title::before {
-    content: "";
-    display: inline-block;
-    width: 3px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 2px;
-    box-shadow: 0 0 6px var(--accent-glow);
-    flex-shrink: 0;
-  }
-
-  .alert-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-  }
-
-  @media (max-width: 1100px) {
-    .alert-grid { grid-template-columns: repeat(3, 1fr); }
-  }
-
-  @media (max-width: 700px) {
-    .alert-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  .alert-card {
-    position: relative;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-top: 3px solid var(--c, var(--border));
-    border-radius: var(--radius-md);
-    padding: 10px 12px;
-  }
-
-  .ac-label {
-    font-size: 10px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .07em;
-    margin-bottom: 4px;
-  }
-
-  .ac-count {
-    font-size: 24px;
-    font-weight: 700;
-    font-family: monospace;
-    color: var(--c, var(--text-high));
-    line-height: 1;
-  }
-
-  .warnings {
-    background: rgba(245,158,11,.06);
-    border-left: 3px solid #f5a623;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    margin-top: 8px;
-  }
-
-  .warnings-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: #f5a623;
-    margin-bottom: 4px;
-  }
-
-  .warnings-text {
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-
-  .owner-board {
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 12px;
-    margin-bottom: 12px;
-  }
-
-  .owner-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .owner-name {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text-high);
-    letter-spacing: .02em;
-  }
-
-  .owner-stats {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: monospace;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-  }
-
-  .alert-badge {
-    background: rgba(240,67,82,.2);
-    color: #f04352;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .04em;
-  }
-
-  .ok-badge {
-    background: rgba(30,201,139,.2);
-    color: #1ec98b;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 700;
-  }
-
-  .creator-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 8px;
-  }
-
-  .creator-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    transition: border-color .15s, background .15s;
-  }
-
-  .creator-card:hover {
-    border-color: var(--border-accent);
-    background: var(--bg-tertiary);
-  }
-
-  .creator-card.missing {
-    border-left-color: #525c70;
-    opacity: .6;
-  }
-
-  .creator-card.level-critical {
-    border-left-color: #f04352;
-    box-shadow: inset 0 0 0 1px rgba(240,67,82,.15);
-  }
-
-  .creator-card.level-warning {
-    border-left-color: #f97316;
-  }
-
-  .creator-card.level-caution {
-    border-left-color: #f5a623;
-  }
-
-  .creator-card.level-ok {
-    border-left-color: #1ec98b;
-  }
-
-  .cc-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .cc-name {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-high);
-    letter-spacing: .01em;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  a.cc-name {
-    text-decoration: none;
-    transition: color .12s;
-  }
-
-  a.cc-name:hover {
-    color: var(--accent);
-    text-decoration: underline;
-  }
-
-
-  .cc-id {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: monospace;
-  }
-
-  .cc-status {
-    font-size: 9px;
-    padding: 1px 4px;
-    border-radius: 2px;
-  }
-
-  .cc-status.missing {
-    background: rgba(82,92,112,.2);
-    color: #8b95a8;
-  }
-
-  .cc-stats {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 6px;
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: monospace;
-    flex-wrap: wrap;
-  }
-
-  .cc-stats .cc-stat b {
-    color: var(--text-primary);
-    font-weight: 700;
-    margin-right: 2px;
-  }
-
-  .cc-videos {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .vrow {
-    display: flex;
-    align-items: stretch;
-    height: 22px;
-    background: #10172c;
-    border-radius: 2px;
-    text-decoration: none;
-    color: inherit;
-    font-family: monospace;
-    font-size: 10px;
-    overflow: hidden;
-    transition: background .12s, transform .12s;
-  }
-
-  .vrow:nth-child(even) {
-    background: #0c1224;
-  }
-
-  .vrow:hover {
-    background: var(--bg-hover);
-    transform: translateX(2px);
-  }
-
-  .vrow.level-critical {
-    box-shadow: inset 3px 0 0 #f04352;
-  }
-
-  .vrow.level-warning {
-    box-shadow: inset 3px 0 0 #f97316;
-  }
-
-  .vrow.level-caution {
-    box-shadow: inset 3px 0 0 #f5a623;
-  }
-
-  .vrow-light {
-    min-width: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    color: #080e1a;
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-
-  .vrow-title {
-    flex: 1;
-    padding: 0 6px;
-    display: flex;
-    align-items: center;
-    font-family: -apple-system, sans-serif;
-    font-size: 11px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text-primary);
-  }
-
-  .vrow-meta {
-    font-size: 10px;
-    color: var(--text-muted);
-    padding: 0 6px;
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
-  .vrow-type {
-    font-size: 9px;
-    padding: 0 4px;
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-    font-weight: 600;
-  }
-
-  .badge.type-vid {
-    background: rgba(59,130,246,.2);
-    color: #60a5fa;
-  }
-
-  .badge.type-img {
-    background: rgba(236,72,153,.2);
-    color: #f472b6;
-  }
-
-  .cc-more {
-    font-size: 10px;
-    color: var(--text-muted);
-    padding: 2px 0 0 6px;
-    font-style: italic;
-  }
-
-  .cc-empty {
-    font-size: 11px;
-    color: var(--text-muted);
-    padding: 4px 0;
-  }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333; }
+.header { background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%); color:#fff; padding:20px 40px; }
+.header .person { font-size:16px; color:#f6c23e; margin-bottom:2px; font-weight:600; }
+.header h1 { font-size:22px; margin-bottom:4px; }
+.header p { color:#a0aec0; font-size:12px; }
+.hero-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; padding:18px 40px 6px; }
+.hero-card { display:flex; align-items:center; gap:16px; border-radius:14px; padding:18px 22px; box-shadow:0 4px 16px rgba(0,0,0,0.08); border:2px solid transparent; transition:transform 0.15s; }
+.hero-card:hover { transform:translateY(-2px); }
+.hero-icon { font-size:36px; line-height:1; }
+.hero-num { font-size:36px; font-weight:900; line-height:1.1; }
+.hero-lbl { font-size:13px; font-weight:600; margin-top:4px; }
+.hero-blue { background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%); border-color:#93c5fd; color:#1e3a8a; }
+.hero-red { background:linear-gradient(135deg,#fee2e2 0%,#fef2f2 100%); border-color:#fca5a5; color:#7f1d1d; }
+.hero-red .hero-num { color:#dc2626; }
+.hero-orange { background:linear-gradient(135deg,#ffedd5 0%,#fff7ed 100%); border-color:#fdba74; color:#7c2d12; }
+.hero-orange .hero-num { color:#ea580c; }
+.stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; padding:10px 40px 14px; }
+.stat-card { background:linear-gradient(135deg,#fff 60%,#f7fafc); border-radius:10px; padding:10px 8px; box-shadow:0 2px 6px rgba(0,0,0,0.04); text-align:center; }
+.stat-card .num { font-size:20px; font-weight:800; color:#1a1a2e; line-height:1.2; }
+.stat-card .lbl { font-size:11px; color:#718096; margin-top:2px; }
+.stat-card.red { background:linear-gradient(135deg,#fef2f2 60%,#fff); }
+.stat-card.red .num { color:#dc2626; }
+.stat-card.red .lbl { color:#dc2626; }
+.tier-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; padding:0 40px 14px; }
+.tier-card { border-radius:10px; padding:10px 8px; text-align:center; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.04); }
+.tier-card .icon { font-size:16px; }
+.tier-card .count { font-size:22px; font-weight:800; line-height:1.2; }
+.tier-card .label { font-size:11px; }
+.tier-card .sub { font-size:10px; opacity:0.7; margin-top:2px; color:#666; }
+.content { padding:0 40px 40px; max-width:1700px; margin:0 auto; }
+.tier-panel { border-radius:10px; padding:10px 16px; margin-bottom:10px; border:1px solid #e5e7eb; background:#fff; }
+.tier-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid rgba(0,0,0,0.05); }
+.tier-icon { font-size:16px; }
+.tier-label { font-size:14px; font-weight:700; }
+.tier-pill { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+.tier-pill-total { background:rgba(255,255,255,0.7); color:#6b7280; }
+.tier-pill-ok { background:#c8e6c9; color:#1b5e20; }
+.tier-pill-maint { background:#ffcdd2; color:#b71c1c; }
+.tier-table { width:100%; border-collapse:collapse; font-size:12px; }
+.tier-table thead th { background:#f3f4f6; color:#374151; padding:6px 10px; font-size:11px; font-weight:600; text-align:left; }
+.tier-table tbody td { padding:6px 10px; border-bottom:1px solid #f3f4f6; }
+.tier-table tbody tr:hover td { background:#f9fafb; }
+.tier-table tbody tr.row-maint { background:#fef2f2; }
+.tier-table tbody tr.row-maint:hover td { background:#fee2e2; }
+.tier-table tbody tr.row-maint td.num { color:#dc2626; font-weight:700; }
+.tier-table tbody td a { color:#2563eb; text-decoration:none; }
+.tier-table tbody td a:hover { text-decoration:underline; }
+.badge-maint { display:inline-block; background:#dc2626; color:#fff; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:700; }
+.badge-ok { display:inline-block; background:#d1fae5; color:#065f46; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:600; }
 </style>
 </head>
 <body>
+<div class="header">
+    <div class="person">👤 ${person}</div>
+    <h1>📊 抖音视频分级监控看板</h1>
+    <p>负责账号: ${totalAccounts} 个 · 总视频: ${totalVideos} 条 · 数据更新: ${updateTime}</p>
+</div>
 
-<header class="vam-header">
-  <div class="vam-brand">
-    <span class="vam-logo">◉</span>
-    <span class="vam-title">VAM 团队监控矩阵</span>
-  </div>
-  <div class="vam-stats">
-    <div class="stat"><span class="k">团队成员</span><span class="v">${data.totalPeople}</span></div>
-    <div class="stat"><span class="k">创作者</span><span class="v">${data.collectedCount}/${data.totalCreators}</span></div>
-    <div class="stat"><span class="k">监控视频</span><span class="v">${data.totalVideosCount}</span></div>
-    <div class="stat"><span class="k">需维护</span><span class="v v-alert">${data.totalNeedsMaintenance}</span></div>
-    <div class="stat"><span class="k">阈值</span><span class="v v-sm">评论 &lt; 10%×点赞</span></div>
-  </div>
-  <div class="vam-meta">生成于 ${timeStr}</div>
-</header>
-<main>
+<div class="hero-stats">
+    <div class="hero-card hero-blue">
+        <div class="hero-icon">📅</div>
+        <div class="hero-content">
+            <div class="hero-num">${l15Videos}</div>
+            <div class="hero-lbl">近15天 发布视频总数</div>
+        </div>
+    </div>
+    <div class="hero-card hero-red">
+        <div class="hero-icon">⚠️</div>
+        <div class="hero-content">
+            <div class="hero-num">${l15Maint}</div>
+            <div class="hero-lbl">近15天 待维护视频数</div>
+        </div>
+    </div>
+    <div class="hero-card hero-orange">
+        <div class="hero-icon">💬</div>
+        <div class="hero-content">
+            <div class="hero-num">${l15MissingCmts}</div>
+            <div class="hero-lbl">近15天 待评论总数</div>
+        </div>
+    </div>
+</div>
 
-<section class="alert-summary">
-  <div class="section-title">🚨 维护提醒汇总 <span class="hint" style="color:var(--text-secondary);font-weight:normal;margin-left:10px;">规则: likes≤10 放行, 10&lt;likes≤500 走 1/10, likes&gt;500 仅需 ≥50 评</span></div>
-  <div class="alert-grid">
-    <div class="alert-card" style="--c:#f04352">
-      <div class="ac-label">极低 (&lt; 2% / &lt;10评)</div>
-      <div class="ac-count">${data.globalAlerts.critical}</div>
-    </div>
-    <div class="alert-card" style="--c:#f97316">
-      <div class="ac-label">很低 (2-5% / 10-24评)</div>
-      <div class="ac-count">${data.globalAlerts.warning}</div>
-    </div>
-    <div class="alert-card" style="--c:#f5a623">
-      <div class="ac-label">偏低 (5-10% / 25-49评)</div>
-      <div class="ac-count">${data.globalAlerts.caution}</div>
-    </div>
-    <div class="alert-card" style="--c:#1ec98b">
-      <div class="ac-label">正常 (≥10% / ≥50评)</div>
-      <div class="ac-count">${data.globalAlerts.ok}</div>
-    </div>
-    <div class="alert-card" style="--c:#525c70">
-      <div class="ac-label">基数小/无数据 (likes≤10)</div>
-      <div class="ac-count">${data.globalAlerts.muted}</div>
-    </div>
-  </div>
-  ${warningsHtml}
-</section>
+<div class="stats-row">
+    <div class="stat-card"><div class="num">${totalAccounts}</div><div class="lbl">负责账号</div></div>
+    <div class="stat-card"><div class="num">${totalFollowers.toLocaleString()}</div><div class="lbl">总粉丝数</div></div>
+    <div class="stat-card"><div class="num">${totalVideos.toLocaleString()}</div><div class="lbl">总视频数</div></div>
+    <div class="stat-card"><div class="num">${totalLikes.toLocaleString()}</div><div class="lbl">总点赞</div></div>
+    <div class="stat-card"><div class="num">${totalComments.toLocaleString()}</div><div class="lbl">总评论</div></div>
+    <div class="stat-card red"><div class="num">${allMaint}</div><div class="lbl">⚠️ 待维护(全部)</div></div>
+</div>
 
-<section class="matrix-list">
-  <div class="section-title">👤 团队负责人看板</div>
-  ${ownerBoardsHtml}
-</section>
+<div class="tier-row">
+${tiersHtml}
+</div>
 
-</main>
+<div class="content">
+${tiersContentHtml}
+</div>
 </body>
 </html>`;
 }
 
-main();
 
+function generateLeaderHtml(leaderName, groupName, leaderStats, membersStats, updateTime) {
+    let rowsHtml = '';
+    
+    // Sort combined by Maint L15 desc
+    const allMembers = [leaderStats, ...membersStats].sort((a,b) => b.l15Maint - a.l15Maint);
+
+    allMembers.forEach((m, i) => {
+        const isLeader = m.name === leaderName;
+        const leaderBadge = isLeader ? ' <span class="role-pill role-1">组长</span>' : '';
+        const rowClass = isLeader ? 'class="is-leader"' : '';
+        rowsHtml += `
+<tr ${rowClass}>
+    <td>${i+1}</td>
+    <td><strong>${m.name}</strong>${leaderBadge}</td>
+    <td>${m.totalAccounts}</td>
+    <td>${m.totalVideos}</td>
+    <td>${m.totalFollowers.toLocaleString()}</td>
+    <td>${m.l15Videos}</td>
+    <td style="color:#dc2626;font-weight:700;">${m.l15Maint}</td>
+    <td style="color:#f87171;font-weight:600;">${m.l15MissingCmts}</td>
+    <td><a href="../person_dashboards/${m.name}.html" target="_blank" style="color:#2563eb;">查看看板 →</a></td>
+</tr>`;
+    });
+
+    const combinedL15Vids = allMembers.reduce((a,b) => a+b.l15Videos, 0);
+    const combinedL15Maint = allMembers.reduce((a,b) => a+b.l15Maint, 0);
+    const combinedL15MissingCmts = allMembers.reduce((a,b) => a+b.l15MissingCmts, 0);
+    const combinedAccounts = allMembers.reduce((a,b) => a+b.totalAccounts, 0);
+    const combinedVids = allMembers.reduce((a,b) => a+b.totalVideos, 0);
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${leaderName} 组长看板 - ${groupName}</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333; padding:40px; }
+h1 { font-size:28px; margin-bottom:4px; }
+h1 span { font-size:14px; font-weight:400; color:#9ca3af; margin-left:12px; }
+.hero-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0 24px; }
+.hero-card { display:flex; align-items:center; gap:16px; border-radius:14px; padding:20px 24px; box-shadow:0 4px 16px rgba(0,0,0,0.08); border:2px solid transparent; transition:transform 0.15s; }
+.hero-card:hover { transform:translateY(-2px); }
+.hero-icon { font-size:36px; line-height:1; }
+.hero-num { font-size:36px; font-weight:900; line-height:1.1; }
+.hero-lbl { font-size:13px; font-weight:600; margin-top:4px; }
+.hero-blue { background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%); border-color:#93c5fd; color:#1e3a8a; }
+.hero-red { background:linear-gradient(135deg,#fee2e2 0%,#fef2f2 100%); border-color:#fca5a5; color:#7f1d1d; }
+.hero-red .hero-num { color:#dc2626; }
+.hero-orange { background:linear-gradient(135deg,#ffedd5 0%,#fff7ed 100%); border-color:#fdba74; color:#7c2d12; }
+.hero-orange .hero-num { color:#ea580c; }
+.subtitle { color:#6b7280; font-size:13px; margin:0 0 8px; }
+table { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.05); font-size:14px; }
+th { background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:14px 16px; text-align:left; font-weight:600; font-size:13px; }
+td { padding:12px 16px; border-bottom:1px solid #f3f4f6; }
+tr:hover td { background:#f9fafb; }
+.is-leader { background:#fef3c7 !important; font-weight:600; }
+a { text-decoration:none; font-weight:600; }
+a:hover { text-decoration:underline; }
+.role-pill { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; margin-left:6px; }
+.role-1 { background:#d1fae5; color:#065f46; }
+.footer { margin-top:20px; font-size:13px; color:#9ca3af; text-align:center; }
+@media (max-width:1024px) { .hero-stats { grid-template-columns:1fr; } body{padding:20px;} }
+</style>
+</head>
+<body>
+<h1>👥 ${leaderName} 组长看板 <span>${groupName} · 组员: ${membersStats.length} 人</span></h1>
+<div class="subtitle">下属 <strong>${membersStats.length}</strong> 人 · 总账号 ${combinedAccounts} · 总视频 ${combinedVids}</div>
+<div class="hero-stats">
+    <div class="hero-card hero-blue">
+        <div class="hero-icon">📅</div>
+        <div class="hero-num">${combinedL15Vids}</div>
+        <div class="hero-lbl">近15天 发布视频总数</div>
+    </div>
+    <div class="hero-card hero-red">
+        <div class="hero-icon">⚠️</div>
+        <div class="hero-num">${combinedL15Maint}</div>
+        <div class="hero-lbl">⚠️ 近15天 待维护视频数</div>
+    </div>
+    <div class="hero-card hero-orange">
+        <div class="hero-icon">💬</div>
+        <div class="hero-num">${combinedL15MissingCmts}</div>
+        <div class="hero-lbl">💬 近15天 待评论总数</div>
+    </div>
+</div>
+<table class="sortable">
+    <thead><tr><th class="num">#</th><th>姓名</th><th class="num">账号数</th><th class="num">总视频</th><th class="num">总粉丝</th><th class="num">近15天发布</th><th class="num" style="color:#fca5a5;">⚠️待维护视频</th><th class="num" style="color:#fca5a5;">待评论数</th><th class="no-sort">看板</th></tr></thead>
+    <tbody>${rowsHtml}</tbody>
+</table>
+<div class="footer">数据更新: ${updateTime} · 仅统计近15天内发布视频</div>
+</body>
+</html>`;
+}
+
+function computePersonStats(person, accounts, videos) {
+    const totalAccounts = accounts.length;
+    const totalVideos = accounts.reduce((acc, a) => acc + (Number(a.data.videoCount) || videos.filter(v=>String(v.account_id)===String(a.data.id)).length), 0);
+    const totalFollowers = accounts.reduce((acc, a) => acc + (Number(a.data.followers) || 0), 0);
+    
+    let l15Videos = 0;
+    let l15Maint = 0;
+    let l15MissingCmts = 0;
+
+    videos.forEach(v => {
+        const likes = Number(v.likes) || 0;
+        const comments = Number(v.comments) || 0;
+        const targetComments = getTargetComments(likes);
+        const isMaint = comments < targetComments;
+        const isL15 = isWithin15Days(v.publishedAt);
+
+        if (isL15) {
+            l15Videos++;
+            if (isMaint) l15Maint++;
+            if (comments < targetComments) l15MissingCmts += (targetComments - comments);
+        }
+    });
+
+    return {
+        name: person,
+        totalAccounts,
+        totalVideos,
+        totalFollowers,
+        l15Videos,
+        l15Maint,
+        l15MissingCmts
+    };
+}
+
+
+// 这里是全局看板的生成逻辑（保留之前做的）
+function generateGlobalDashboardHtml(DATA, INSIGHTS) {
+  // 从原有的代码里把那些 Chart.js 全局看板代码复制过来
+  const generatedAt = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抖音账号总体监控看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f0f2f5; color: #333; }
+.header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); color: #fff; padding: 30px 40px; }
+.header h1 { font-size: 28px; margin-bottom: 8px; }
+.header p { color: #a0aec0; font-size: 14px; }
+.nav-links { display:flex; gap:12px; margin-top:12px;}
+.nav-links a { color:#fff; text-decoration:none; background:rgba(255,255,255,0.15); padding:6px 12px; border-radius:6px; font-size:14px; transition:background 0.2s; }
+.nav-links a:hover { background:rgba(255,255,255,0.25); }
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; padding: 24px 40px; }
+.stat-card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
+.stat-card .number { font-size: 32px; font-weight: 700; color: #1a1a2e; }
+.stat-card .label { font-size: 13px; color: #718096; margin-top: 4px; }
+.stat-card .sub { font-size: 11px; color: #a0aec0; margin-top: 2px; }
+.content { padding: 0 40px 40px; max-width: 1600px; margin: 0 auto; }
+.section { margin-bottom: 28px; }
+.section-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: #2d3748; display: flex; align-items: center; gap: 8px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.card { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden; }
+.card-header { padding: 16px 20px; border-bottom: 1px solid #edf2f7; font-weight: 600; font-size: 15px; color: #2d3748; }
+.card-body { padding: 20px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: #f7fafc; padding: 10px 12px; text-align: left; font-weight: 600; color: #4a5568; border-bottom: 2px solid #e2e8f0; white-space: nowrap; }
+td { padding: 10px 12px; border-bottom: 1px solid #edf2f7; }
+tr:hover td { background: #f7fafc; }
+.rank-num { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; font-size: 12px; font-weight: 700; background: #e2e8f0; color: #4a5568; }
+.rank-1 { background: #f6c23e; color: #fff; }
+.rank-2 { background: #a0aec0; color: #fff; }
+.rank-3 { background: #ed8936; color: #fff; }
+.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-item { background: #ebf4ff; color: #3182ce; padding: 6px 14px; border-radius: 16px; font-size: 13px; transition: transform 0.2s; }
+.tag-item:hover { transform: scale(1.05); background: #bee3f8; }
+.chart-container { position: relative; height: 300px; }
+.insight-box { background: linear-gradient(135deg, #fefcbf, #fef9e7); border-left: 4px solid #d69e2e; padding: 16px 20px; border-radius: 8px; font-size: 14px; line-height: 1.8; }
+.insight-box strong { color: #744210; }
+@media (max-width: 1024px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } .content { padding: 0 16px 16px; } .header { padding: 20px; } .stats-row { padding: 16px; grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>📊 抖音账号总体监控看板</h1>
+    <p>监控账号总数: \${DATA.totalAccounts} 个 · 数据起止: \${DATA.earliestDate} 至 \${DATA.latestDate} · 报告生成: ${generatedAt}</p>
+    <div class="nav-links">
+        ${Object.keys(TEAM_HIERARCHY).map(leader => `<a href="./leader_dashboards/${leader}.html">${leader}看板</a>`).join('')}
+    </div>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="number">\${DATA.totalAccounts}</div>
+        <div class="label">监控账号总数</div>
+        <div class="sub">活跃 \${DATA.activeAccounts} / 空数据 \${DATA.inactiveAccounts}</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">\${(DATA.totalFollowers / 10000).toFixed(1)}万</div>
+        <div class="label">总粉丝数</div>
+        <div class="sub">覆盖 \${DATA.totalFollowers.toLocaleString()} 人</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">\${DATA.totalVideos}</div>
+        <div class="label">总视频数</div>
+        <div class="sub">去重采集 \${DATA.totalUniqueVideos} 条</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">\${(DATA.totalLikes / 10000).toFixed(1)}万</div>
+        <div class="label">总点赞数</div>
+        <div class="sub">\${DATA.totalLikes.toLocaleString()} 次</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">\${DATA.totalComments.toLocaleString()}</div>
+        <div class="label">总评论数</div>
+        <div class="sub">互动总计 \${DATA.totalEngagement.toLocaleString()}</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">\${DATA.avgEngagementPerVideo}</div>
+        <div class="label">单条平均互动</div>
+        <div class="sub">点赞+评论 / 视频数</div>
+    </div>
+</div>
+
+<div class="content">
+
+<div class="section">
+    <div class="section-title">💡 核心洞察</div>
+    <div class="insight-box" id="insightBox"></div>
+</div>
+
+<div class="section">
+    <div class="grid-3">
+        <div class="card">
+            <div class="card-header">🏆 粉丝数 TOP 10</div>
+            <div class="card-body" style="padding:0">
+                <table>
+                    <thead><tr><th>#</th><th>账号</th><th>粉丝</th><th>视频</th><th>点赞</th></tr></thead>
+                    <tbody id="followersRank"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">🔥 点赞数 TOP 10</div>
+            <div class="card-body" style="padding:0">
+                <table>
+                    <thead><tr><th>#</th><th>账号</th><th>点赞</th><th>粉丝</th><th>评论</th></tr></thead>
+                    <tbody id="likesRank"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">📹 高产账号 TOP 10</div>
+            <div class="card-body" style="padding:0">
+                <table>
+                    <thead><tr><th>#</th><th>账号</th><th>视频数</th><th>粉丝</th><th>点赞</th></tr></thead>
+                    <tbody id="videosRank"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-header">📈 粉丝数分布</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="distChart"></canvas></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">🎬 视频类型分布</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="typeChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-header">📊 账号粉丝数排行 TOP 15</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="barChart"></canvas></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">⚡ 互动率排行 TOP 15</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="engagementChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="card">
+        <div class="card-header">🏷️ 热门话题标签 TOP 30</div>
+        <div class="card-body">
+            <div class="tag-cloud" id="tagCloud"></div>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="card">
+        <div class="card-header">📋 所有账号数据总表（按粉丝数排序）</div>
+        <div class="card-body" style="padding:0; overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>负责人</th>
+                        <th>账号名称</th>
+                        <th>粉丝数</th>
+                        <th>视频数</th>
+                        <th>总点赞</th>
+                        <th>总评论</th>
+                        <th>互动率</th>
+                    </tr>
+                </thead>
+                <tbody id="allAccountsTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+</div>
+
+<script>
+var DATA = \${JSON.stringify(DATA)};
+var INSIGHTS = \${JSON.stringify(INSIGHTS)};
+
+// 核心洞察
+document.getElementById('insightBox').innerHTML = INSIGHTS.map(function(s) { return '📌 ' + s; }).join('<br>');
+
+// 排行榜
+function renderRank(tbodyId, data, mode) {
+    var tbody = document.getElementById(tbodyId);
+    var html = '';
+    for (var i = 0; i < Math.min(10, data.length); i++) {
+        var item = data[i];
+        var rankClass = i === 0 ? 'rank-1' : (i === 1 ? 'rank-2' : (i === 2 ? 'rank-3' : ''));
+        var name = item.name || '未命名';
+        var v1, v2, v3;
+        if (mode === 'followers') {
+            v1 = item.followers.toLocaleString();
+            v2 = item.videos.toLocaleString();
+            v3 = item.likes.toLocaleString();
+        } else if (mode === 'likes') {
+            v1 = item.likes.toLocaleString();
+            v2 = item.followers.toLocaleString();
+            v3 = item.comments.toLocaleString();
+        } else {
+            v1 = item.videos.toLocaleString();
+            v2 = item.followers.toLocaleString();
+            v3 = item.likes.toLocaleString();
+        }
+        html += '<tr>' +
+            '<td><span class="rank-num ' + rankClass + '">' + (i+1) + '</span></td>' +
+            '<td><strong>' + name + '</strong></td>' +
+            '<td>' + v1 + '</td>' +
+            '<td>' + v2 + '</td>' +
+            '<td>' + v3 + '</td></tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+renderRank('followersRank', DATA.byFollowers, 'followers');
+renderRank('likesRank', DATA.byLikes, 'likes');
+renderRank('videosRank', DATA.byVideos, 'videos');
+
+// 粉丝数分布图
+new Chart(document.getElementById('distChart'), {
+    type: 'pie',
+    data: {
+        labels: DATA.sizeDistribution.map(function(d) { return d.range + ' 粉丝'; }),
+        datasets: [{
+            data: DATA.sizeDistribution.map(function(d) { return d.count; }),
+            backgroundColor: ['#48bb78', '#4299e1', '#ed8936', '#9f7aea', '#f56565'],
+            borderWidth: 2,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { position: 'right', labels: { font: { size: 13 } } },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) {
+                        return ctx.label + ': ' + ctx.raw + ' 个账号 (' + (ctx.raw / DATA.totalAccounts * 100).toFixed(1) + '%)';
+                    }
+                }
+            }
+        }
+    }
+});
+
+// 视频类型分布
+var typeLabels = { 'video': '视频', 'image_text': '图文', 'live_replay': '直播回放', 'live': '直播', 'unknown': '其他' };
+var typeKeys = Object.keys(DATA.videoTypes);
+var typeData = typeKeys.map(function(k) { return DATA.videoTypes[k]; });
+var typeNames = typeKeys.map(function(k) { return typeLabels[k] || k; });
+
+new Chart(document.getElementById('typeChart'), {
+    type: 'doughnut',
+    data: {
+        labels: typeNames,
+        datasets: [{
+            data: typeData,
+            backgroundColor: ['#4299e1', '#48bb78', '#ed8936', '#9f7aea', '#f56565'],
+            borderWidth: 2,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { position: 'right', labels: { font: { size: 13 } } },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) {
+                        var total = typeData.reduce(function(a,b) { return a+b; }, 0);
+                        return ctx.label + ': ' + ctx.raw + ' 条 (' + (ctx.raw / total * 100).toFixed(1) + '%)';
+                    }
+                }
+            }
+        }
+    }
+});
+
+// 粉丝数柱状图 TOP 15
+var colors15 = ['#667eea','#764ba2','#f093fb','#4facfe','#43e97b','#fa709a','#f6d365','#a18cd1','#fbc2eb','#a6c1ee','#fccb90','#d57eeb','#e0c3fc','#8ec5fc','#a78bfa'];
+var top15 = DATA.byFollowers.slice(0, 15);
+
+new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+        labels: top15.map(function(a) {
+            var name = a.name || '未命名';
+            return name.length > 6 ? name.slice(0,6) + '..' : name;
+        }),
+        datasets: [{
+            label: '粉丝数',
+            data: top15.map(function(a) { return a.followers; }),
+            backgroundColor: colors15,
+            borderRadius: 4,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { title: { display: true, text: '粉丝数' } },
+            y: { ticks: { font: { size: 11 } } }
+        }
+    }
+});
+
+// 互动率排行
+var engData = DATA.engagementRate.slice(0, 15);
+var engColors = ['#48bb78','#38a169','#4299e1','#3182ce','#ed8936','#dd6b20','#9f7aea','#805ad5','#f56565','#e53e3e','#d69e2e','#b7791f','#38b2ac','#319795','#667eea'];
+
+new Chart(document.getElementById('engagementChart'), {
+    type: 'bar',
+    data: {
+        labels: engData.map(function(a) {
+            var name = a.name || '未命名';
+            return name.length > 6 ? name.slice(0,6) + '..' : name;
+        }),
+        datasets: [{
+            label: '互动率 (互动/粉丝)',
+            data: engData.map(function(a) { return a.rate; }),
+            backgroundColor: engColors,
+            borderRadius: 4,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { title: { display: true, text: '互动率' } },
+            y: { ticks: { font: { size: 11 } } }
+        }
+    }
+});
+
+// 热门标签
+var tagCloud = document.getElementById('tagCloud');
+var maxCount = 0;
+for (var ti = 0; ti < DATA.topTags.length; ti++) {
+    if (DATA.topTags[ti].count > maxCount) maxCount = DATA.topTags[ti].count;
+}
+var tagHtml = '';
+for (var ti = 0; ti < DATA.topTags.length; ti++) {
+    var t = DATA.topTags[ti];
+    var size = 12 + (t.count / maxCount) * 18;
+    var opacity = 0.5 + (t.count / maxCount) * 0.5;
+    tagHtml += '<span class="tag-item" style="font-size:' + size.toFixed(0) + 'px; opacity:' + opacity.toFixed(2) + '">#' + t.tag + ' (' + t.count + ')</span>';
+}
+tagCloud.innerHTML = tagHtml;
+
+// 所有账号总表
+var allTbody = document.getElementById('allAccountsTable');
+var allHtml = '';
+for (var ai = 0; ai < DATA.byFollowers.length; ai++) {
+    var a = DATA.byFollowers[ai];
+    var er = a.followers > 0 ? ((a.likes + a.comments) / a.followers).toFixed(2) : '-';
+    var person = a.person || '-';
+    allHtml += '<tr>' +
+        '<td>' + (ai+1) + '</td>' +
+        '<td><span style="color:#718096">' + person + '</span></td>' +
+        '<td><a href="./person_dashboards/' + person + '.html" target="_blank" style="color:#3182ce; text-decoration:none;"><strong>' + (a.name || '未命名') + '</strong></a></td>' +
+        '<td>' + a.followers.toLocaleString() + '</td>' +
+        '<td>' + a.videos.toLocaleString() + '</td>' +
+        '<td>' + a.likes.toLocaleString() + '</td>' +
+        '<td>' + a.comments.toLocaleString() + '</td>' +
+        '<td>' + er + '</td></tr>';
+}
+allTbody.innerHTML = allHtml;
+</script>
+</body>
+</html>`}
+
+function generateGlobalStats(summaryMap, videosMap) {
+  let totalAccounts = 0;
+  let activeAccounts = 0;
+  let totalFollowers = 0;
+  let totalVideos = 0;
+  let totalLikes = 0;
+  let totalComments = 0;
+  let totalUniqueVideos = 0;
+  let earliestDate = "9999-12-31";
+  let latestDate = "0000-01-01";
+  
+  const videoTypes = {};
+  const tagCounts = {};
+  const accountsData = [];
+
+  for (const [secId, summaryObj] of summaryMap.entries()) {
+    const s = summaryObj.data;
+    const vids = videosMap.get(secId) || [];
+    
+    totalAccounts++;
+    const followers = Number(s.followers) || 0;
+    const likes = Number(s.totalLikes) || 0;
+    const comments = Number(s.totalComments) || 0;
+    const vCount = vids.length; 
+    
+    if (vCount > 0 || likes > 0 || followers > 0) activeAccounts++;
+    
+    totalFollowers += followers;
+    totalLikes += likes;
+    totalComments += comments;
+    totalVideos += (Number(s.videoCount) || vCount);
+    totalUniqueVideos += vCount;
+    
+    for (const v of vids) {
+      const t = v.type || 'video';
+      videoTypes[t] = (videoTypes[t] || 0) + 1;
+      
+      if (v.publishedAt) {
+        const d = v.publishedAt.slice(0, 10);
+        if (d < earliestDate) earliestDate = d;
+        if (d > latestDate) latestDate = d;
+      }
+      if (v.tags) {
+        const tags = String(v.tags).split(' ').filter(Boolean);
+        for (const tag of tags) tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      }
+    }
+    
+    accountsData.push({
+      person: s.person || '',
+      name: s.name || '未命名',
+      followers,
+      videos: vCount,
+      likes,
+      comments
+    });
+  }
+  
+  const totalEngagement = totalLikes + totalComments;
+  const avgEngagementPerVideo = totalUniqueVideos > 0 ? (totalEngagement / totalUniqueVideos).toFixed(1) : 0;
+  
+  const sortedTags = Object.entries(tagCounts).map(([tag, count]) => ({tag, count})).sort((a, b) => b.count - a.count);
+  const byFollowers = [...accountsData].sort((a, b) => b.followers - a.followers);
+  const byLikes = [...accountsData].sort((a, b) => b.likes - a.likes);
+  const byVideos = [...accountsData].sort((a, b) => b.videos - a.videos);
+  
+  const engagementRate = [...accountsData].filter(a => a.followers > 0).map(a => ({
+      name: a.name,
+      followers: a.followers,
+      rate: Number(((a.likes + a.comments) / a.followers).toFixed(2))
+    })).sort((a, b) => b.rate - a.rate);
+    
+  const dist = [
+    { range: "0-100", max: 100, count: 0 },
+    { range: "101-500", max: 500, count: 0 },
+    { range: "501-1000", max: 1000, count: 0 },
+    { range: "1001-5000", max: 5000, count: 0 },
+    { range: "5000+", max: Infinity, count: 0 }
+  ];
+  for (const a of accountsData) {
+    for (const d of dist) {
+      if (a.followers <= d.max) { d.count++; break; }
+    }
+  }
+  
+  const DATA = {
+    totalAccounts, activeAccounts, inactiveAccounts: totalAccounts - activeAccounts,
+    totalFollowers, totalVideos, totalLikes, totalComments, totalEngagement, totalUniqueVideos, avgEngagementPerVideo,
+    earliestDate: earliestDate === "9999-12-31" ? "-" : earliestDate,
+    latestDate: latestDate === "0000-01-01" ? "-" : latestDate,
+    videoTypes, topTags: sortedTags.slice(0, 30), byFollowers, byLikes, byVideos, engagementRate,
+    sizeDistribution: dist.map(d => ({ range: d.range, count: d.count }))
+  };
+  
+  const INSIGHTS = [
+    `覆盖总粉丝 ${totalFollowers.toLocaleString()} 人，总点赞 ${totalLikes.toLocaleString()} 次，总评论 ${totalComments.toLocaleString()} 条`,
+    byFollowers.length > 0 ? `粉丝最多的账号是「${byFollowers[0].name}」，拥有 ${byFollowers[0].followers.toLocaleString()} 粉丝` : '',
+    byLikes.length > 0 ? `最受欢迎的账号是「${byLikes[0].name}」，累计获得 ${byLikes[0].likes.toLocaleString()} 次点赞` : '',
+    byVideos.length > 0 ? `最高产的账号是「${byVideos[0].name}」，共发布 ${byVideos[0].videos.toLocaleString()} 条视频` : '',
+  ].filter(Boolean);
+  
+  if (DATA.topTags.length > 0) INSIGHTS.push(`热门话题「#${DATA.topTags[0].tag}」出现 ${DATA.topTags[0].count} 次`);
+
+  return { DATA, INSIGHTS };
+}
+
+
+function main() {
+  console.log('[Dashboard] 开始读取数据并生成多级监控看板...');
+
+  const { summaryMap, videosMap } = loadDatabaseData();
+  const updateTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+  // 1. 获取所有人员名单
+  const personSet = new Set();
+  for (const s of summaryMap.values()) {
+      if (s.data.person) personSet.add(s.data.person);
+  }
+  // 加上配置里的人员，以防部分人员没数据
+  Object.keys(TEAM_HIERARCHY).forEach(k => {
+      personSet.add(k);
+      TEAM_HIERARCHY[k].members.forEach(m => personSet.add(m));
+  });
+
+  const allPersonStats = {};
+
+  // 2. 生成个人看板 (Person Dashboards)
+  for (const person of personSet) {
+      // Find accounts for this person
+      const pAccounts = [];
+      const pVideos = [];
+      for (const s of summaryMap.values()) {
+          if (s.data.person === person) {
+              pAccounts.push(s);
+              const vids = videosMap.get(String(s.data.id)) || [];
+              pVideos.push(...vids);
+          }
+      }
+
+      // 生成个人统计数据并保存，供 leader 板块使用
+      const pStats = computePersonStats(person, pAccounts, pVideos);
+      allPersonStats[person] = pStats;
+
+      // 生成 HTML
+      const pHtml = generatePersonHtml(person, pAccounts, pVideos, updateTime);
+      writeFileSync(join(personDashboardsDir, `${person}.html`), pHtml, 'utf8');
+  }
+  console.log(`[Dashboard] 生成了 ${personSet.size} 个个人监控看板`);
+
+  // 3. 生成组长看板 (Leader Dashboards)
+  let leaderCount = 0;
+  for (const [leader, info] of Object.entries(TEAM_HIERARCHY)) {
+      leaderCount++;
+      const leaderStats = allPersonStats[leader] || computePersonStats(leader, [], []);
+      
+      let membersStats = [];
+      
+      if (info.isTopLeader) {
+          info.members.forEach(m => {
+              let mStats = allPersonStats[m];
+              // 聚合组长底下的数据
+              if (TEAM_HIERARCHY[m]) {
+                  const subTeam = TEAM_HIERARCHY[m].members;
+                  let combinedStats = { ...mStats };
+                  subTeam.forEach(sub => {
+                      if(allPersonStats[sub]) {
+                          combinedStats.totalAccounts += allPersonStats[sub].totalAccounts;
+                          combinedStats.totalVideos += allPersonStats[sub].totalVideos;
+                          combinedStats.totalFollowers += allPersonStats[sub].totalFollowers;
+                          combinedStats.l15Videos += allPersonStats[sub].l15Videos;
+                          combinedStats.l15Maint += allPersonStats[sub].l15Maint;
+                          combinedStats.l15MissingCmts += allPersonStats[sub].l15MissingCmts;
+                      }
+                  });
+                  membersStats.push(combinedStats);
+              } else {
+                  if(mStats) membersStats.push(mStats);
+              }
+          });
+      } else {
+          info.members.forEach(m => {
+              if (allPersonStats[m]) membersStats.push(allPersonStats[m]);
+          });
+      }
+
+      const lHtml = generateLeaderHtml(leader, info.groupName, leaderStats, membersStats, updateTime);
+      writeFileSync(join(leaderDashboardsDir, `${leader}.html`), lHtml, 'utf8');
+  }
+  console.log(`[Dashboard] 生成了 ${leaderCount} 个组长监控看板`);
+
+  // 4. 生成全局大看板
+  const { DATA, INSIGHTS } = generateGlobalStats(summaryMap, videosMap);
+  const globalHtml = generateGlobalDashboardHtml(DATA, INSIGHTS);
+  writeFileSync(join(outputsDir, 'index.html'), globalHtml, 'utf8');
+  console.log(`[Dashboard] 成功生成全局图表看板: ${join(outputsDir, 'index.html')}`);
+}
+
+main();

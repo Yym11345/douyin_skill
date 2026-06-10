@@ -79,7 +79,16 @@ function main() {
     }
   }
 
-  console.log('\n[Batch] 所有账号批处理采集完毕！已自动更新全局监控面板。');
+  console.log('\n[Batch] 所有账号批处理采集完毕！正在自动更新全局监控面板...');
+
+  // 批量采集完成后自动重新生成所有看板
+  try {
+    execSync('node scripts/dashboard.mjs', { stdio: 'inherit' });
+    console.log('\n[Batch] 监控面板已更新完成！');
+  } catch (dashErr) {
+    console.error('[Batch] 看板生成失败，请手动运行: node scripts/dashboard.mjs');
+    console.error(dashErr.message);
+  }
 }
 
 main();
