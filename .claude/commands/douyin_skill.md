@@ -71,36 +71,32 @@ argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relog
    - `HTTP 412 / 403` → 风控触发，建议 `--delay 5000` 并减小 `--limit`
    - `channel "chrome"` 相关错误 → 本机没有 Google Chrome，引导用户跑 `install.ps1` / `install.sh`
    - Excel 写入卡住（脚本会循环打"请关闭 Excel"） → 关闭 Office 占用 `outputs/Douyin_All_Data.xlsx` 的进程
-   - 看板缺 `config/team.json` → 引导用户 `cp config/team.example.json config/team.json` 并按组织层级修改（只是缺组长看板，全局和个人看板仍正常生成）
+   - 看板缺"组长看板" → 引导用户编辑 `config/组织关系.txt`（v3.4+ 不再需要 `cp team.example.json`）
 
-## 团队配置（`config/team.json`）
+## 团队配置（`config/组织关系.txt`）
 
-`dashboard.mjs` 会读这个文件生成**组长看板**（含下级成员汇总）。首次使用：
+`dashboard.mjs` 启动时会**优先**读 `config/组织关系.txt` 自动解析并覆盖 `config/team.json`，生成组长看板。**v3.4+ 不再需要 `cp team.example.json`**。
 
-```bash
-cp config/team.example.json config/team.json
-# 然后编辑 config/team.json，按实际组织层级修改
+### `config/组织关系.txt` 格式
+
+```
+推广一部主管：梁景煜
+推广一部一组→组长：王梦圆，组员：陈星羽、陈一诺、张晨旭、罗永乐
+推广一部二组→组长：王楚楚，组员：朱怡雯
+推广一部三组→组长：洪碧瑶，组员：李珊、潘梦营、季朝娣、朱一凡、安惠靖
 ```
 
-```json
-{
-  "teams": {
-    "示例组长A": {
-      "groupName": "示例部门 (全组汇总)",
-      "members": ["示例组长B", "示例组长C"],
-      "isTopLeader": true
-    },
-    "示例组长B": {
-      "groupName": "示例部门一组",
-      "members": ["成员1", "成员2", "成员3"]
-    }
-  }
-}
-```
+- **第一行**顶级主管（`XXX主管：姓名`，写一次）
+- **后续每行**一个小组，格式 `组名→组长：姓名，组员：姓名1、姓名2、姓名3`
+- 分隔符支持 `→`、中英文逗号、顿号、空格
+- 脚本会自动生成 `"总管大盘"` 顶级组，leader 是主管，members 是所有组长+组员的并集
+- 找不到 `组织关系.txt` 时退回读旧 `config/team.json`（兜底兼容）
 
-- `isTopLeader: true` 表示该人员的 `members` 是"下属组长"（看板会进一步聚合每个组长的数据）
-- 普通组长的 `members` 是直接组员名单
-- 找不到该文件时：全局看板 + 个人看板仍正常生成，**只有**组长看板会跳过
+### 修改方式
+
+- 改团队架构 → **直接编辑 `config/组织关系.txt`** → 下次跑 `dashboard.mjs` 自动应用
+- `config/team.json` 是**自动生成的**，**不要手改**（每次 dashboard 启动会被覆盖写）
+- 极端情况：想写死 JSON 而不每次被覆盖 → 编辑 `config/team.json` **并**删除 `config/组织关系.txt`
 
 ## 备注
 

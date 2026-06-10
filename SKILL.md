@@ -118,34 +118,45 @@ node scripts/dashboard.mjs
 
 低于目标即视为"待维护"。`isWithin15Days()` 额外标记"近 15 天内发布的待维护视频"为重点。
 
-## 团队配置（`config/team.json`）
+## 团队配置（`config/组织关系.txt`）
 
-组长看板依赖此文件。首次使用：
+组长看板依赖团队组织架构。**v3.4+ 改了**：直接编辑纯文本 `config/组织关系.txt`，`dashboard.mjs` 会在每次启动时**自动**解析并写回 `config/team.json`。不再需要手动 `cp team.example.json`。
 
-```bash
-cp config/team.example.json config/team.json
-# 然后编辑 config/team.json，按实际组织层级修改
+### `config/组织关系.txt` 格式
+
 ```
+推广一部主管：梁景煜
+推广一部一组→组长：王梦圆，组员：陈星羽、陈一诺、张晨旭、罗永乐
+推广一部二组→组长：王楚楚，组员：朱怡雯
+推广一部三组→组长：洪碧瑶，组员：李珊、潘梦营、季朝娣、朱一凡、安惠靖
+```
+
+- **第一行**：顶级主管（写一次 `XXX主管：姓名`）
+- **后续每行**：一个小组，格式 `组名→组长：姓名，组员：姓名1、姓名2、姓名3`（分隔符支持 →/中英文逗号/顿号/空格）
+- 解析后脚本会自动生成 `"总管大盘"` 顶级组，leader 是主管，members 是所有组长+组员的并集
+
+### `config/team.json`（自动生成，**不要手改**）
+
+脚本每次运行都会**重写**该文件（根据 `组织关系.txt` 重新生成）。新结构示例：
 
 ```json
 {
   "teams": {
-    "示例组长A": {
-      "groupName": "示例部门 (全组汇总)",
-      "members": ["示例组长B", "示例组长C"],
-      "isTopLeader": true
-    },
-    "示例组长B": {
-      "groupName": "示例部门一组",
-      "members": ["成员1", "成员2", "成员3"]
-    }
+    "推广一部一组": { "leader": "王梦圆", "members": ["陈星羽", "陈一诺", ...] },
+    "推广一部二组": { "leader": "王楚楚", "members": ["朱怡雯"] },
+    "推广一部三组": { "leader": "洪碧瑶", "members": ["李珊", ...] },
+    "总管大盘":   { "leader": "梁景煜", "members": ["王梦圆", "陈星羽", ...] }
   }
 }
 ```
 
-- `isTopLeader: true` 表示该人员的 `members` 是"下属组长"（看板会进一步聚合每个组长的数据）
-- 普通组长的 `members` 是直接组员名单
-- 找不到该文件时：全局看板 + 个人看板仍正常生成，**只有**组长看板会跳过
+- `组织关系.txt` **存在** → 优先用它，每次覆盖写 `team.json`
+- `组织关系.txt` **不存在** → 退回读旧的 `config/team.json`（兜底兼容）
+- 都不存在 → 跳过组长看板，全局/个人看板仍正常生成
+
+> ⚠️ 如果你的团队架构是固定写死的（不想每次 dashboard 运行时被覆盖），直接编辑 `config/team.json` 并**删除** `config/组织关系.txt`，脚本会退回读 team.json。
+>
+> ⚠️ 当前 `dashboard.mjs` 仍引用旧字段 `info.isTopLeader` / `info.groupName`（在小组长循环里），新结构下这两个值是 `undefined`，所以"总管大盘"看板的 HTML 标题会显示 `undefined`，且其 `membersStats` 列表为空。**小组长看板不受影响**——会正常显示组名 + 组长 + 组员数据。
 
 ## 参数说明
 
@@ -334,10 +345,10 @@ node scripts/collect.mjs --account "新账号URL" --relogin
 
 ### 8. 看板缺"组长看板"
 
-未配置 `config/team.json`：
+未配置团队架构。**v3.4+ 改用纯文本配置**：
 ```bash
-cp config/team.example.json config/team.json
-# 编辑 config/team.json 填入你的组长 / 组员名单
+# 编辑 config/组织关系.txt（参考上方"团队配置"章节的格式）
+# 下一跑 dashboard.mjs 时会自动解析并生成 config/team.json
 ```
 
 ### 9. 历史版本遗留工具 `organize_outputs.mjs`
@@ -356,8 +367,9 @@ douyin_skill/
 ├── install.ps1 / install.sh          # 全局安装脚本（方式一）
 ├── setup.bat / setup.sh              # 本地依赖安装脚本（方式二）
 ├── config/
-│   ├── team.example.json             # 团队配置模板
-│   └── team.json                     # 实际团队层级（gitignored，首次需从 example 复制）
+│   ├── 组织关系.txt                  # 团队组织架构（用户编辑源，dashboard.mjs 启动时自动解析）
+│   ├── team.example.json             # 旧版 JSON 模板（仅作参考，新版用 组织关系.txt）
+│   └── team.json                     # 自动生成的 JSON（不要手改；删除 组织关系.txt 才用得到）
 ├── .claude/
 │   └── commands/
 │       └── douyin_skill.md           # /douyin_skill 斜杠命令定义

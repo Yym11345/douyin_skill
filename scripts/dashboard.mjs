@@ -38,7 +38,7 @@ if (existsSync(teamTxtPath)) {
         const lines = readFileSync(teamTxtPath, 'utf8').split('\n');
         let teamObj = {};
         let topLeader = null;
-        let allTopLeaderMembers = new Set();
+        let groupLeaders = [];
         
         for (let line of lines) {
             line = line.trim();
@@ -55,13 +55,13 @@ if (existsSync(teamTxtPath)) {
                 let membersStr = rest.substring(leaderStr.length + 1);
                 let leader = leaderStr.replace('组长：', '').trim();
                 let members = membersStr.replace('组员：', '').split(/[、，, ]+/).map(s => s.trim()).filter(Boolean);
-                teamObj[groupName] = { leader, members };
-                allTopLeaderMembers.add(leader);
-                members.forEach(m => allTopLeaderMembers.add(m));
+                
+                teamObj[leader] = { groupName, members };
+                groupLeaders.push(leader);
             }
         }
         if (topLeader) {
-            teamObj['总管大盘'] = { leader: topLeader, members: Array.from(allTopLeaderMembers) };
+            teamObj[topLeader] = { groupName: '总管大盘', isTopLeader: true, members: groupLeaders };
         }
         TEAM_HIERARCHY = teamObj;
         writeFileSync(teamConfigPath, JSON.stringify({teams: teamObj}, null, 2), 'utf8');
