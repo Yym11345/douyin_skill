@@ -70,7 +70,7 @@ function main() {
   console.log('[Organize] 扫描 outputs/ 目录下的现有数据...');
   const directFolders = readdirSync(outputsDir).filter(name => {
     const fullPath = join(outputsDir, name);
-    // 排除负责人目录和 index.html
+    // 排除负责人目录和 dashboard.html
     return statSync(fullPath).isDirectory() && !owners.has(name);
   });
 

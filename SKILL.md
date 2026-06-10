@@ -75,7 +75,7 @@ node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 ## 生成监控面板 (人员分组版)
 
-在完成所有账号的数据采集后，可以运行监控面板生成脚本。该脚本会读取 `账号监控_人员分组.xlsx` 获取人员分组信息，并汇总 `outputs/` 目录下的所有 `summary.json` 文件，最终在 `outputs/index.html` 生成一个统一的暗色交互式监控看板：
+在完成所有账号的数据采集后，可以运行监控面板生成脚本。该脚本会读取 `账号监控_人员分组.xlsx` 获取人员分组信息，并汇总 `outputs/` 目录下的所有 `summary.json` 文件，最终在 `outputs/dashboard.html` 生成一个统一的暗色交互式监控看板：
 
 ```bash
 npm run dashboard

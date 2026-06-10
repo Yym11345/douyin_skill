@@ -4,7 +4,7 @@
  * 
  * 读取 outputs/Douyin_All_Data.xlsx
  * 生成多级可视化的 Chart.js / HTML 看板:
- * - outputs/index.html (全局总看板)
+ * - outputs/dashboard.html (全局总看板)
  * - outputs/person_dashboards/*.html (个人详细看板)
  * - outputs/leader_dashboards/*.html (组长管理看板)
  */
@@ -1021,8 +1021,8 @@ function main() {
   // 4. 生成全局大看板
   const { DATA, INSIGHTS } = generateGlobalStats(summaryMap, videosMap);
   const globalHtml = generateGlobalDashboardHtml(DATA, INSIGHTS);
-  writeFileSync(join(outputsDir, 'index.html'), globalHtml, 'utf8');
-  console.log(`[Dashboard] 成功生成全局图表看板: ${join(outputsDir, 'index.html')}`);
+  writeFileSync(join(outputsDir, 'dashboard.html'), globalHtml, 'utf8');
+  console.log(`[Dashboard] 成功生成全局图表看板: ${join(outputsDir, 'dashboard.html')}`);
 }
 
 main();
