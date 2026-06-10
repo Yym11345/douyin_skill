@@ -537,7 +537,7 @@ tr:hover td { background: #f7fafc; }
 
 <div class="header">
     <h1>📊 抖音账号总体监控看板</h1>
-    <p>监控账号总数: \${DATA.totalAccounts} 个 · 数据起止: \${DATA.earliestDate} 至 \${DATA.latestDate} · 报告生成: ${generatedAt}</p>
+    <p>监控账号总数: ${DATA.totalAccounts} 个 · 数据起止: ${DATA.earliestDate} 至 ${DATA.latestDate} · 报告生成: ${generatedAt}</p>
     <div class="nav-links">
         ${Object.keys(TEAM_HIERARCHY).map(leader => `<a href="./leader_dashboards/${leader}.html">${leader}看板</a>`).join('')}
     </div>
@@ -545,32 +545,32 @@ tr:hover td { background: #f7fafc; }
 
 <div class="stats-row">
     <div class="stat-card">
-        <div class="number">\${DATA.totalAccounts}</div>
+        <div class="number">${DATA.totalAccounts}</div>
         <div class="label">监控账号总数</div>
-        <div class="sub">活跃 \${DATA.activeAccounts} / 空数据 \${DATA.inactiveAccounts}</div>
+        <div class="sub">活跃 ${DATA.activeAccounts} / 空数据 ${DATA.inactiveAccounts}</div>
     </div>
     <div class="stat-card">
-        <div class="number">\${(DATA.totalFollowers / 10000).toFixed(1)}万</div>
+        <div class="number">${(DATA.totalFollowers / 10000).toFixed(1)}万</div>
         <div class="label">总粉丝数</div>
-        <div class="sub">覆盖 \${DATA.totalFollowers.toLocaleString()} 人</div>
+        <div class="sub">覆盖 ${DATA.totalFollowers.toLocaleString()} 人</div>
     </div>
     <div class="stat-card">
-        <div class="number">\${DATA.totalVideos}</div>
+        <div class="number">${DATA.totalVideos}</div>
         <div class="label">总视频数</div>
-        <div class="sub">去重采集 \${DATA.totalUniqueVideos} 条</div>
+        <div class="sub">去重采集 ${DATA.totalUniqueVideos} 条</div>
     </div>
     <div class="stat-card">
-        <div class="number">\${(DATA.totalLikes / 10000).toFixed(1)}万</div>
+        <div class="number">${(DATA.totalLikes / 10000).toFixed(1)}万</div>
         <div class="label">总点赞数</div>
-        <div class="sub">\${DATA.totalLikes.toLocaleString()} 次</div>
+        <div class="sub">${DATA.totalLikes.toLocaleString()} 次</div>
     </div>
     <div class="stat-card">
-        <div class="number">\${DATA.totalComments.toLocaleString()}</div>
+        <div class="number">${DATA.totalComments.toLocaleString()}</div>
         <div class="label">总评论数</div>
-        <div class="sub">互动总计 \${DATA.totalEngagement.toLocaleString()}</div>
+        <div class="sub">互动总计 ${DATA.totalEngagement.toLocaleString()}</div>
     </div>
     <div class="stat-card">
-        <div class="number">\${DATA.avgEngagementPerVideo}</div>
+        <div class="number">${DATA.avgEngagementPerVideo}</div>
         <div class="label">单条平均互动</div>
         <div class="sub">点赞+评论 / 视频数</div>
     </div>
@@ -684,8 +684,8 @@ tr:hover td { background: #f7fafc; }
 </div>
 
 <script>
-var DATA = \${JSON.stringify(DATA)};
-var INSIGHTS = \${JSON.stringify(INSIGHTS)};
+var DATA = ${JSON.stringify(DATA)};
+var INSIGHTS = ${JSON.stringify(INSIGHTS)};
 
 // 核心洞察
 document.getElementById('insightBox').innerHTML = INSIGHTS.map(function(s) { return '📌 ' + s; }).join('<br>');
