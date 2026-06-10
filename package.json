@@ -1,6 +1,6 @@
 {
   "name": "douyin-skill",
-  "version": "3.2.0",
+  "version": "3.4.0",
   "description": "Douyin (抖音) creator account data collector — browser-native API interception, no signing required",
   "type": "module",
   "engines": {

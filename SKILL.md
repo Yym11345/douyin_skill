@@ -133,7 +133,7 @@ node scripts/dashboard.mjs
 
 - **第一行**：顶级主管（写一次 `XXX主管：姓名`）
 - **后续每行**：一个小组，格式 `组名→组长：姓名，组员：姓名1、姓名2、姓名3`（分隔符支持 →/中英文逗号/顿号/空格）
-- 解析后脚本会自动生成 `"总管大盘"` 顶级组，leader 是主管，members 是所有组长+组员的并集
+- 解析后脚本会自动生成 `"总管大盘"` 顶级组，leader 是主管，members 是**所有组长**的并集（main() 用它递归聚合每个组长的组员数据）
 
 ### `config/team.json`（自动生成，**不要手改**）
 
@@ -142,21 +142,22 @@ node scripts/dashboard.mjs
 ```json
 {
   "teams": {
-    "推广一部一组": { "leader": "王梦圆", "members": ["陈星羽", "陈一诺", ...] },
-    "推广一部二组": { "leader": "王楚楚", "members": ["朱怡雯"] },
-    "推广一部三组": { "leader": "洪碧瑶", "members": ["李珊", ...] },
-    "总管大盘":   { "leader": "梁景煜", "members": ["王梦圆", "陈星羽", ...] }
+    "王梦圆": { "groupName": "推广一部一组", "members": ["陈星羽", "陈一诺", "张晨旭", "罗永乐"] },
+    "王楚楚": { "groupName": "推广一部二组", "members": ["朱怡雯"] },
+    "洪碧瑶": { "groupName": "推广一部三组", "members": ["李珊", "潘梦营", "季朝娣", "朱一凡", "安惠靖"] },
+    "梁景煜": { "groupName": "总管大盘", "isTopLeader": true, "members": ["王梦圆", "王楚楚", "洪碧瑶"] }
   }
 }
 ```
 
+- **key 是组长姓名**（不是组名）—— 看板文件命名就是 `${组长姓名}.html`
+- 小组：`{ groupName: 组名, members: [组员] }`
+- 总管大盘：`{ groupName: "总管大盘", isTopLeader: true, members: [所有组长] }`
 - `组织关系.txt` **存在** → 优先用它，每次覆盖写 `team.json`
 - `组织关系.txt` **不存在** → 退回读旧的 `config/team.json`（兜底兼容）
 - 都不存在 → 跳过组长看板，全局/个人看板仍正常生成
 
 > ⚠️ 如果你的团队架构是固定写死的（不想每次 dashboard 运行时被覆盖），直接编辑 `config/team.json` 并**删除** `config/组织关系.txt`，脚本会退回读 team.json。
->
-> ⚠️ 当前 `dashboard.mjs` 仍引用旧字段 `info.isTopLeader` / `info.groupName`（在小组长循环里），新结构下这两个值是 `undefined`，所以"总管大盘"看板的 HTML 标题会显示 `undefined`，且其 `membersStats` 列表为空。**小组长看板不受影响**——会正常显示组名 + 组长 + 组员数据。
 
 ## 参数说明
 

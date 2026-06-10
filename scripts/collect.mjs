@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * douyin_skill v3.2 — Playwright API Interceptor
+ * douyin_skill v3.4 — Playwright API Interceptor
  *
  * 这是一个完全基于浏览器网络拦截的数据采集方案：
  * 1. 启动 Playwright 浏览器（复用本地 Cookie）
  * 2. 导航到目标创作者的主页
  * 3. 监听网络响应，实时捕获并解析 `/aweme/v1/web/user/profile/other/` 和 `/aweme/v1/web/aweme/post/`
  * 4. 模拟人工滚动页面，自动触发抖音官方前端的分页请求
- * 5. 将抓取到的数据自动去重并导出为 summary.json, videos.json, videos.csv
+ * 5. 将抓取到的数据 upsert 写入 outputs/Douyin_All_Data.xlsx（Summary + Videos 两个 sheet）
+ *    并自动刷新三级监控看板（全局/个人/组长）
  *
  * 优势：
  * - 100% 绕过 a_bogus / msToken 签名校验
@@ -1070,7 +1071,7 @@ function sanitizeName(name) {
     }
 
   } catch (err) {
-    console.error(`[douyin_skill v3.3] Error: ${err.message}`);
+    console.error(`[douyin_skill v3.4] Error: ${err.message}`);
     process.exit(1);
   } finally {
     if (context) await context.close();
