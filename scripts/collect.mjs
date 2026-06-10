@@ -15,17 +15,39 @@
  * - 支持扫码登录与验证码登录，并且断线可重连，出现滑动验证码时可人工交互解决
  */
 
-import { writeFileSync, mkdirSync, readFileSync, existsSync, renameSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const XLSX = require("xlsx");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ── Helper: find existing output directory for a given sec_user_id ──────────
+// Recursively scans all summary.json files in the given base directory.
+function findExistingAccountDir(baseDir, targetSecUserId) {
+  if (!existsSync(baseDir)) return null;
+  try {
+    const entries = readdirSync(baseDir);
+    for (const entry of entries) {
+      const fullPath = join(baseDir, entry);
+      let stat;
+      try { stat = statSync(fullPath); } catch { continue; }
+      if (!stat.isDirectory()) continue;
+      const summaryPath = join(fullPath, "summary.json");
+      if (existsSync(summaryPath)) {
+        try {
+          const data = JSON.parse(readFileSync(summaryPath, "utf8"));
+          if (data.id === targetSecUserId) return fullPath;
+        } catch { /* ignore parse errors */ }
+      }
+      // Recurse one level deeper
+      const nested = findExistingAccountDir(fullPath, targetSecUserId);
+      if (nested) return nested;
+    }
+  } catch { /* ignore read errors */ }
+  return null;
+}
 
 // ── Browser Setup ─────────────────────────────────────────────────────
 
@@ -891,97 +913,61 @@ function sanitizeName(name) {
       fetchedAt: new Date().toISOString(),
     };
 
-    // ── Update Single Excel Output ────────────────────────────────────
-    const excelPath = join(__dirname, "..", "outputs", "Douyin_All_Data.xlsx");
-    let wb;
-    if (existsSync(excelPath)) {
-      wb = XLSX.readFile(excelPath);
-    } else {
-      wb = XLSX.utils.book_new();
-    }
-
-    const summarySheetName = "Summary";
-    const videoSheetName = "Videos";
-
-    // Update Summary Sheet
-    let summaryData = [];
-    if (wb.SheetNames.includes(summarySheetName)) {
-      summaryData = XLSX.utils.sheet_to_json(wb.Sheets[summarySheetName]);
-    }
-    const summaryRow = {
-      person: args.person || "",
-      id: summary.id,
-      name: summary.name,
-      platform: summary.platform,
-      followers: summary.followers,
-      videoCount: summary.videoCount,
-      totalLikes: summary.totalLikes,
-      totalComments: summary.totalComments,
-      url: summary.url,
-      fetchedAt: summary.fetchedAt
-    };
-    const existingSummaryIdx = summaryData.findIndex(r => String(r.id) === String(summary.id));
-    if (existingSummaryIdx >= 0) summaryData[existingSummaryIdx] = summaryRow;
-    else summaryData.push(summaryRow);
-
-    const newSummaryWs = XLSX.utils.json_to_sheet(summaryData);
-    if (wb.SheetNames.includes(summarySheetName)) wb.Sheets[summarySheetName] = newSummaryWs;
-    else XLSX.utils.book_append_sheet(wb, newSummaryWs, summarySheetName);
-
-    // Update Videos Sheet
-    let videoData = [];
-    if (wb.SheetNames.includes(videoSheetName)) {
-      videoData = XLSX.utils.sheet_to_json(wb.Sheets[videoSheetName]);
-    }
-    // Remove old videos for this account
-    videoData = videoData.filter(v => String(v.account_id) !== String(summary.id));
-    // Append new videos
-    const newVideoRows = videos.map(v => ({
-      person: args.person || "",
-      account_name: summary.name,
-      account_id: summary.id,
-      id: v.id,
-      type: v.type,
-      title: v.title,
-      url: v.url,
-      publishedAt: v.publishedAt,
-      duration: v.duration,
-      isTop: v.isTop ? 1 : 0,
-      likes: v.likes,
-      comments: v.comments,
-      shares: v.shares,
-      favorites: v.favorites,
-      tags: (v.tags || []).join(" "),
-      musicTitle: v.musicTitle || ""
-    }));
-    videoData.push(...newVideoRows);
-
-    const newVideoWs = XLSX.utils.json_to_sheet(videoData);
-    if (wb.SheetNames.includes(videoSheetName)) wb.Sheets[videoSheetName] = newVideoWs;
-    else XLSX.utils.book_append_sheet(wb, newVideoWs, videoSheetName);
-
-    // ── Atomic Write: write to temp file first, then rename ──────────────
-    // This prevents data loss if Excel is open or a crash occurs mid-write.
-    mkdirSync(join(__dirname, "..", "outputs"), { recursive: true });
-    const tempPath = excelPath + ".tmp";
-    try {
-      XLSX.writeFile(wb, tempPath);
-      // Only replace the real file after the temp write succeeds
-      if (existsSync(excelPath)) renameSync(excelPath, excelPath + ".bak");
-      renameSync(tempPath, excelPath);
-      // Remove backup once confirmed successful
-      if (existsSync(excelPath + ".bak")) {
-        try { require('node:fs').unlinkSync(excelPath + ".bak"); } catch(_) {}
+    // Resolve final output directory: prefer --out, then smart overwrite, then nickname
+    if (!outDir) {
+      // Step 1: scan all existing outputs/ subdirectories
+      const outputsRoot = join(__dirname, "..", "outputs");
+      const existingDir = findExistingAccountDir(outputsRoot, secUserId);
+      if (existingDir) {
+        outDir = existingDir;
+        console.log(`[Output] 已找到该账号的历史数据目录：${outDir}`);
+        console.log(`[Output] 本次采集数据将直接覆盖历史数据。`);
+      } else {
+        // Step 2: new account — use nickname as directory name
+        const nickname = sanitizeName(userInfo.nickname || "");
+        const baseName = nickname || secUserId;
+        let candidate = join("./outputs", baseName);
+        if (existsSync(candidate)) {
+          try {
+            const existing = JSON.parse(readFileSync(join(candidate, "summary.json"), "utf8"));
+            if (existing.id !== secUserId) {
+              candidate = `${candidate}_${secUserId.slice(0, 12)}`;
+            }
+          } catch { /* ignore */ }
+        }
+        outDir = candidate;
       }
-    } catch (writeErr) {
-      // Clean up temp file on failure
-      try { require('node:fs').unlinkSync(tempPath); } catch(_) {}
-      throw new Error(
-        `[写入失败] Excel 文件写入失败，数据已安全保留在原文件中。\n` +
-        `原因：${writeErr.message}\n` +
-        `提示：请关闭 Excel 中已打开的 Douyin_All_Data.xlsx 后重试。`
-      );
     }
+
+    // Save results
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
+    writeFileSync(join(outDir, "videos.json"), JSON.stringify(videos, null, 2), "utf8");
+
+    // CSV — include new fields
+    const csvHeader = "id,type,title,url,publishedAt,duration,isTop,likes,comments,shares,favorites,tags,musicTitle";
+    const csvRows = videos.map((v) =>
+      [
+        v.id,
+        v.type,
+        `"${String(v.title).replace(/"/g, '""')}"`,
+        v.url,
+        v.publishedAt,
+        v.duration,
+        v.isTop ? "1" : "0",
+        v.likes,
+        v.comments,
+        v.shares,
+        v.favorites,
+        `"${(v.tags || []).join(" ")}"`,
+        `"${String(v.musicTitle || "").replace(/"/g, '""')}"`,
+      ].join(",")
+    );
+    writeFileSync(join(outDir, "videos.csv"), "\ufeff" + [csvHeader, ...csvRows].join("\n"), "utf8");
+
+    // HTML Report
+    const htmlReport = generateHtmlReport(summary, videos, userInfo);
+    writeFileSync(join(outDir, "report.html"), htmlReport, "utf8");
 
     // Summary
     const typeCount = {};
@@ -995,7 +981,7 @@ function sanitizeName(name) {
     console.log(`  Types   : ${typeStr}`);
     console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
     console.log(`  Comments: ${summary.totalComments.toLocaleString()}`);
-    console.log(`  Output  : Excel Data appended to outputs/Douyin_All_Data.xlsx`);
+    console.log(`  Output  : ${outDir}`);
 
     // Automatically generate/update dashboard
     try {

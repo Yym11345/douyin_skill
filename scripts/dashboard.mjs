@@ -81,23 +81,103 @@ function loadDatabaseData() {
   const videosMap = new Map();
   const dataDbPath = join(outputsDir, 'Douyin_All_Data.xlsx');
   
+  // 1. Load legacy Excel data to preserve historical data
   if (existsSync(dataDbPath)) {
-    const dataWb = XLSX.readFile(dataDbPath);
-    if (dataWb.SheetNames.includes('Summary')) {
-      const summaries = XLSX.utils.sheet_to_json(dataWb.Sheets['Summary']);
-      for (const s of summaries) {
-        if (s.id) summaryMap.set(String(s.id), { data: s });
+    try {
+      const dataWb = XLSX.readFile(dataDbPath);
+      if (dataWb.SheetNames.includes('Summary')) {
+        const summaries = XLSX.utils.sheet_to_json(dataWb.Sheets['Summary']);
+        for (const s of summaries) {
+          if (s.id) summaryMap.set(String(s.id), { data: s });
+        }
       }
+      if (dataWb.SheetNames.includes('Videos')) {
+        const videos = XLSX.utils.sheet_to_json(dataWb.Sheets['Videos']);
+        for (const v of videos) {
+          const accId = String(v.account_id);
+          if (!videosMap.has(accId)) videosMap.set(accId, []);
+          videosMap.get(accId).push(v);
+        }
+      }
+      console.log(`[Dashboard] 成功加载历史数据：${summaryMap.size} 个账号`);
+    } catch (e) {
+      console.error(`[Dashboard] 警告：无法读取历史 Excel 数据 (${e.message})`);
     }
-    if (dataWb.SheetNames.includes('Videos')) {
-      const videos = XLSX.utils.sheet_to_json(dataWb.Sheets['Videos']);
-      for (const v of videos) {
-        const accId = String(v.account_id);
-        if (!videosMap.has(accId)) videosMap.set(accId, []);
-        videosMap.get(accId).push(v);
+  }
+
+  // 2. Scan all JSON files in outputs/ for new/updated data
+  const entries = require('node:fs').readdirSync(outputsDir);
+  for (const entry of entries) {
+    const fullPath = join(outputsDir, entry);
+    let stat;
+    try { stat = require('node:fs').statSync(fullPath); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+    if (['person_dashboards', 'leader_dashboards'].includes(entry)) continue;
+    
+    const summaryPath = join(fullPath, 'summary.json');
+    const videosPath = join(fullPath, 'videos.json');
+    
+    if (existsSync(summaryPath)) {
+      try {
+        const s = JSON.parse(require('node:fs').readFileSync(summaryPath, 'utf8'));
+        
+        let accountPerson = "未分配";
+        const urlsPath = join(projectRoot, 'urls_by_person.json');
+        if (existsSync(urlsPath)) {
+           try {
+             const mapping = JSON.parse(require('node:fs').readFileSync(urlsPath, 'utf8'));
+             for (const [p, urls] of Object.entries(mapping)) {
+                if (urls.includes(s.url) || urls.some(u => String(u).includes(s.id))) {
+                   accountPerson = p; break;
+                }
+             }
+           } catch {}
+        }
+
+        s.person = accountPerson;
+        if (s.id) summaryMap.set(String(s.id), { data: s });
+        
+        if (existsSync(videosPath)) {
+          const vids = JSON.parse(require('node:fs').readFileSync(videosPath, 'utf8'));
+          const accId = String(s.id);
+          const mappedVids = vids.map(v => ({
+             ...v, account_name: s.name, account_id: s.id, person: accountPerson
+          }));
+          
+          // Overwrite videos for this account completely
+          videosMap.set(accId, mappedVids);
+        }
+      } catch (e) {
+        console.error(`[Dashboard] 解析 JSON 错误: ${entry} - ${e.message}`);
       }
     }
   }
+
+  // 3. Rewrite the Excel file (Data Warehouse capability)
+  try {
+    console.log(`[Dashboard] 正在汇总 ${summaryMap.size} 个账号的数据到 Excel...`);
+    const summaryData = Array.from(summaryMap.values()).map(v => v.data);
+    const videoData = [];
+    for (const vids of videosMap.values()) {
+        videoData.push(...vids);
+    }
+    
+    const wb = XLSX.utils.book_new();
+    const sumWs = XLSX.utils.json_to_sheet(summaryData);
+    const vidWs = XLSX.utils.json_to_sheet(videoData);
+    XLSX.utils.book_append_sheet(wb, sumWs, 'Summary');
+    XLSX.utils.book_append_sheet(wb, vidWs, 'Videos');
+    
+    // Attempt to write
+    const tempPath = dataDbPath + '.tmp.xlsx';
+    XLSX.writeFile(wb, tempPath);
+    if (existsSync(dataDbPath)) require('node:fs').renameSync(dataDbPath, dataDbPath + '.bak');
+    require('node:fs').renameSync(tempPath, dataDbPath);
+    if (existsSync(dataDbPath + '.bak')) require('node:fs').unlinkSync(dataDbPath + '.bak');
+  } catch (e) {
+    console.error(`[Dashboard] 写入汇总 Excel 失败 (如果 Excel 已打开请关闭它): ${e.message}`);
+  }
+
   return { summaryMap, videosMap };
 }
 
@@ -166,12 +246,7 @@ function generatePersonHtml(person, accounts, videos, updateTime) {
             return bDate.localeCompare(aDate);
         });
 
-        let rowsHtml = tier.vids.map((v, i) => {
-            const pubDate = (v.publishedAt || '').slice(0, 10);
-            const safeTitle = htmlEscape(v.title || '');
-            const shortTitle = htmlEscape((v.title || '').slice(0, 40));
-            return `<tr class="${v.isMaint ? 'row-maint' : ''}"><td class="num">${i+1}</td><td>${v.isMaint ? '<span class="badge-maint">⚠️ 待维护</span>' : '<span class="badge-ok">✅ 达标</span>'}</td><td>${htmlEscape(v.accountName)}</td><td><a href="${v.url || '#'}" target="_blank" title="${safeTitle}">${shortTitle}${(v.title||'').length > 40 ? '...' : ''}</a></td><td class="num">${v.likes}</td><td class="num">${v.comments} ${v.isMaint ? `<em>/${v.targetComments}</em>` : ''}</td><td>${pubDate}</td></tr>`;
-        }).join('\n');
+        let rowsHtml = ""; // Client-side rendering
 
         tiersContentHtml += `
     <div class="tier-panel">
@@ -186,6 +261,8 @@ function generatePersonHtml(person, accounts, videos, updateTime) {
     </tbody></table></div></div>`;
     });
 
+        const tiersJsonBase64 = Buffer.from(JSON.stringify(tiers)).toString('base64');
+    
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -292,6 +369,56 @@ ${tiersHtml}
 <div class="content">
 ${tiersContentHtml}
 </div>
+
+<script>
+  // Decode and parse the JSON data injected from the server
+  const PAGE_DATA = JSON.parse(atob('${tiersJsonBase64}'));
+  
+  function htmlEscape(str) {
+      return String(str || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+  }
+
+  // Render a specific tier
+  function renderTier(tierIndex) {
+      const tier = PAGE_DATA[tierIndex];
+      const tbody = document.querySelectorAll('.tier-table tbody')[tierIndex];
+      
+      // We render a max of 500 rows to prevent DOM bloat, or we can just render all since the JS loop is fast 
+      // and won't lock up the server. But let's limit to 300 to be safe for DOM.
+      const MAX_ROWS = 300;
+      const vidsToRender = tier.vids.slice(0, MAX_ROWS);
+      
+      let rowsHtml = '';
+      vidsToRender.forEach((v, i) => {
+          const pubDate = (v.publishedAt || '').slice(0, 10);
+          const safeTitle = htmlEscape(v.title || '');
+          const shortTitle = htmlEscape((v.title || '').slice(0, 40));
+          const rowClass = v.isMaint ? 'row-maint' : '';
+          const statusBadge = v.isMaint ? '<span class="badge-maint">⚠️ 待维护</span>' : '<span class="badge-ok">✅ 达标</span>';
+          const commentsHtml = v.comments + (v.isMaint ? ' <em>/' + v.targetComments + '</em>' : '');
+          
+          rowsHtml += '<tr class="' + rowClass + '"><td class="num">' + (i+1) + '</td><td>' + statusBadge + '</td><td>' + htmlEscape(v.accountName) + '</td><td><a href="' + (v.url || '#') + '" target="_blank" title="' + safeTitle + '">' + shortTitle + (v.title && v.title.length > 40 ? '...' : '') + '</a></td><td class="num">' + v.likes + '</td><td class="num">' + commentsHtml + '</td><td>' + pubDate + '</td></tr>';
+      });
+      
+      if (tier.vids.length > MAX_ROWS) {
+          rowsHtml += '<tr><td colspan="7" style="text-align:center;color:#666;">只显示前 ' + MAX_ROWS + ' 条数据，更多数据请查看全局面板或下载 Excel。</td></tr>';
+      }
+      
+      tbody.innerHTML = rowsHtml;
+  }
+
+  // Initialize all tiers
+  document.addEventListener('DOMContentLoaded', () => {
+      for (let i = 0; i < PAGE_DATA.length; i++) {
+          renderTier(i);
+      }
+  });
+</script>
 </body>
 </html>`;
 }
