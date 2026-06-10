@@ -1,11 +1,11 @@
 ---
 name: douyin_skill
-description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Exports summary.json, videos.json, videos.csv, and an HTML report. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan.
+description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Writes all data to a centralized Excel (outputs/Douyin_All_Data.xlsx) with two sheets (Summary / Videos), then auto-refreshes a three-tier dashboard (global / person / leader) under outputs/. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan. Use --person to tag the responsible team member for Excel-side attribution.
 ---
 
-# Douyin Skill (v3.3)
+# Douyin Skill (v3.4)
 
-从抖音采集创作者账号数据——粉丝数、视频列表、点赞/播放/评论/分享指标，导出 `summary.json`、`videos.json`、`videos.csv` 与一个可分享的 `report.html`。
+从抖音采集创作者账号数据——粉丝数、视频列表、点赞/评论/分享指标，**集中写入** `outputs/Douyin_All_Data.xlsx`，并**自动刷新三级监控看板**。
 
 ## 安装依赖
 
@@ -21,14 +21,14 @@ macOS / Linux：
 bash <(curl -fsSL https://raw.githubusercontent.com/Yym11345/douyin_skill/master/install.sh)
 ```
 
-## AI 助手集成指南 (Claude / Codex / Antigravity)
+> 安装脚本会自动尝试将本技能注册到您的 AI 助手环境中。
 
-使用全局安装脚本（上方命令）时，脚本会自动尝试将本技能注册到您的 AI 助手环境中。
+### 2. Claude Code
 
-### 1. Claude Code
 全局安装脚本会自动在您当前的 Workspace 目录下生成 `.claude/commands/douyin_skill.md`。安装后，直接在终端中输入 `/douyin_skill <url>` 即可调用。
 
-### 2. Antigravity (Gemini)
+### 3. Antigravity (Gemini)
+
 安装脚本会自动在您的 `~/.gemini/config/plugins/` 目录下创建 `douyin_skill` 插件链接。安装完成后，Antigravity 将能在任何对话中发现并调用此技能。
 如果你是以独立项目形式克隆的代码，也可以手动将本项目目录注册到 Antigravity：
 ```bash
@@ -41,7 +41,8 @@ mkdir -p ~/.gemini/config/plugins/douyin_skill
 ln -sf $(pwd)/SKILL.md ~/.gemini/config/plugins/douyin_skill/SKILL.md
 ```
 
-### 3. Codex (及其他遵循通用技能协议的 Agent)
+### 4. Codex (及其他遵循通用技能协议的 Agent)
+
 对于 Codex 等支持指定本地技能目录的助手，您只需将代码库克隆后，在助手设置中将本项目的根目录指定为**自定义技能路径 (Custom Skill Path)**。Codex 会自动读取根目录下的 `SKILL.md` 并掌握如何调用该工具。
 
 ---
@@ -59,6 +60,8 @@ npx playwright install chromium   # 首次必须，约 200MB
 
 ## 使用方法
 
+### 单账号采集
+
 ```bash
 node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
@@ -70,24 +73,79 @@ node scripts/collect.mjs --account "https://www.douyin.com/user/MS4wLjABAAAA..."
 4. 登录成功后跳转到目标创作者主页
 5. 脚本通过网络响应拦截器实时捕获 `/aweme/v1/web/user/profile/other/` 与 `/aweme/v1/web/aweme/post/`
 6. 模拟真人滚动触发分页（mouse.wheel + jitter scroll），自动去重
-7. 写入 `./outputs/<创作者昵称>/`：`summary.json` / `videos.json` / `videos.csv` / `report.html`（默认用昵称做目录名；指定 `--out` 则按指定路径）
-8. Cookie 保存到 `./private/profiles/douyin/`，下次直接复用免扫码
+7. **upsert 写入 `outputs/Douyin_All_Data.xlsx`**（Summary + Videos 两个 sheet）
+8. **自动刷新看板** —— 采集完成后脚本末尾自动 `node scripts/dashboard.mjs`
+9. Cookie 保存到 `./private/profiles/douyin/`，下次直接复用免扫码
 
-## 生成监控面板 (人员分组版)
-
-在完成所有账号的数据采集后，可以运行监控面板生成脚本。该脚本会读取 `账号监控_人员分组.xlsx` 获取人员分组信息，并汇总 `outputs/` 目录下的所有 `summary.json` 文件，最终在 `outputs/dashboard.html` 生成一个统一的暗色交互式监控看板：
+### 批量采集（按 Excel 人员分组）
 
 ```bash
-npm run dashboard
-# 或者直接运行:
+node scripts/batch_collect.mjs
+```
+
+会读取项目根目录的 `账号监控_人员分组.xlsx`（`按人分组` 工作表），**顺序**逐个 `execSync` 调用 `collect.mjs` 并自动传入 `--person` 负责人。**绝对不要并发**——会触发抖音风控和浏览器多开卡死。
+
+### 仅刷新看板
+
+```bash
 node scripts/dashboard.mjs
 ```
 
-**看板功能：**
-1. **全局汇总指标**：实时展示总账号数、已采集率、总粉丝数、总点赞量及总视频数量。
-2. **👤 负责人看板**：列表展示 12 位负责人管理的账号数、总粉丝数与总赞数，支持按赞/粉/账号数排序。**点击任一负责人卡片可实时筛选右侧账号列表**。
-3. **🎬 账号监控明细**：列表展示 105 个账号的实时粉丝数、赞数、作品数与最近采集时间。支持关键词搜索、状态筛选及按指标排序，点击“查看报告”可直达对应账号的单页数据报告 (`report.html`)。
-4. **URL 状态同步**：排序和人员筛选状态会自动同步至 URL 参数，刷新页面或分享链接可直接保留当前视角。
+适用：手工编辑过 `config/team.json`、或外部修改了 `Douyin_All_Data.xlsx` 后想重新生成页面。
+
+## 看板（3 类产出）
+
+`dashboard.mjs` 读取 `outputs/Douyin_All_Data.xlsx` 并生成：
+
+| 文件 | 内容 |
+|------|------|
+| `outputs/dashboard.html` | **全局总看板**：总账号数 / 已采集率 / 总粉丝 / 总赞 / 总评 / 视频类型分布 / 标签云 / 粉丝 / 赞 / 作品数 Top 榜 / 互动率榜 / 粉丝量分档 |
+| `outputs/person_dashboards/<name>.html` | **个人看板**：每个负责人的 6 档视频分级（10/50/100/500/1000/1000+ 赞）+ 待维护判定（评论数 vs 目标评论数）+ 近 15 天优先 |
+| `outputs/leader_dashboards/<name>.html` | **组长看板**：按 `config/team.json` 配置的层级聚合下级组长 / 组员数据 |
+
+> **关键点**：所有 dashboard HTML 用 `<script>` 客户端从嵌入的 JSON 数据渲染（`d927e1d`），不再 base64 注入，避免 UTF-8 mojibake；体积更小、首屏更快。
+
+### 视频分级与维护判定
+
+| 点赞区间 | 维护目标评论数 |
+|----------|----------------|
+| < 10 赞 | ≥ 1 |
+| < 50 赞 | ≥ 2 |
+| < 100 赞 | ≥ 4 |
+| < 500 赞 | ≥ 5 |
+| < 1000 赞 | ≥ 10 |
+| ≥ 1000 赞 | ≥ 15 |
+
+低于目标即视为"待维护"。`isWithin15Days()` 额外标记"近 15 天内发布的待维护视频"为重点。
+
+## 团队配置（`config/team.json`）
+
+组长看板依赖此文件。首次使用：
+
+```bash
+cp config/team.example.json config/team.json
+# 然后编辑 config/team.json，按实际组织层级修改
+```
+
+```json
+{
+  "teams": {
+    "示例组长A": {
+      "groupName": "示例部门 (全组汇总)",
+      "members": ["示例组长B", "示例组长C"],
+      "isTopLeader": true
+    },
+    "示例组长B": {
+      "groupName": "示例部门一组",
+      "members": ["成员1", "成员2", "成员3"]
+    }
+  }
+}
+```
+
+- `isTopLeader: true` 表示该人员的 `members` 是"下属组长"（看板会进一步聚合每个组长的数据）
+- 普通组长的 `members` 是直接组员名单
+- 找不到该文件时：全局看板 + 个人看板仍正常生成，**只有**组长看板会跳过
 
 ## 参数说明
 
@@ -97,12 +155,10 @@ node scripts/dashboard.mjs
 | `--profile` | 浏览器配置文件目录（持久化登录态） | `./private/profiles/douyin` |
 | `--limit` | 最多采集视频数量 | `200` |
 | `--delay` | 滚动间隔等待新响应的最大毫秒数 | `2000` |
-| `--out` | 输出目录 | `./outputs/<创作者昵称>` |
+| `--person` | 负责人姓名，写入 Excel 行内做归人字段（`batch_collect.mjs` 会自动传入） | （空） |
 | `--relogin` | 清除已保存的登录态强制重新扫码 | `false` |
 
-> v3.3 已移除 `--cookie` / `--no-browser` / `--browser` 旗标。采集必须通过浏览器拦截器进行——这是它能稳定绕过风控的根本原因。
->
-> v3.3 输出目录默认采用**创作者昵称**（经过 `sanitizeName` 处理：`\ / : * ? " < > |` 替换为空格转下划线、最长 60 字符）。若昵称为空则回退到 `sec_user_id`。
+> v3.4 已彻底移除 `--cookie` / `--no-browser` / `--browser` / `--out`。采集必须通过浏览器拦截器进行——这是它能稳定绕过风控的根本原因。**所有数据集中写入 `outputs/Douyin_All_Data.xlsx`**，不再有"按账号独立输出目录"的概念。
 
 ## Account 格式
 
@@ -141,55 +197,59 @@ MS4wLjABAAAA...
 
 7. **下次运行**：复用持久化配置文件，免扫码
 
-## 输出格式
+## 输出格式（v3.4：集中 Excel）
 
-### summary.json
+所有数据写入 `outputs/Douyin_All_Data.xlsx`，包含两个 sheet。
 
-```json
-{
-  "platform": "douyin",
-  "id": "MS4wLjABAAAA...",
-  "url": "https://www.douyin.com/user/...",
-  "name": "创作者昵称",
-  "followers": 1000000,
-  "videoCount": 500,
-  "totalLikes": 50000000,
-  "totalComments": 1000000,
-  "fetchedAt": "2026-06-05T10:00:00.000Z"
-}
-```
+### Summary sheet
 
-> 注意：v3.3.2+ 移除了 `views` / `totalViews` 字段——抖音对部分账号 `play_count=0`（隐藏播放量），统计失真。如需播放量请直接走 `https://www.douyin.com/video/<aweme_id>` 页面。
+每行一个账号：
 
-### videos.json / videos.csv
-
-每条视频包含：
-
-| 字段 | 说明 |
+| 列 | 含义 |
 |------|------|
+| `person` | 负责人（来自 `--person` / `batch_collect.mjs`） |
+| `id` | sec_user_id |
+| `name` | 创作者昵称 |
+| `platform` | `douyin` |
+| `followers` | 粉丝数 |
+| `videoCount` | 视频总数（API 返回） |
+| `totalLikes` | 获赞总数 |
+| `totalComments` | 已采集视频的评论合计 |
+| `url` | 主页 URL |
+| `fetchedAt` | 采集时间（ISO 8601） |
+
+> 注意：v3.2+ 移除了 `views` / `totalViews` 字段——抖音对部分账号 `play_count=0`（隐藏播放量），统计失真。如需播放量请直接走 `https://www.douyin.com/video/<aweme_id>` 页面。
+
+### Videos sheet
+
+每行一个视频：
+
+| 列 | 含义 |
+|------|------|
+| `person` | 负责人 |
+| `account_name` | 创作者昵称 |
+| `account_id` | sec_user_id |
 | `id` | 视频 `aweme_id` |
 | `type` | 内容类型：`video`（视频）/ `image_text`（图文，aweme_type 2 或 68）/ `live_replay`（直播回放，aweme_type 61）/ `live`（直播切片，aweme_type 51） |
 | `title` | 视频描述/标题 |
 | `url` | 视频页面 URL |
 | `publishedAt` | 发布时间（+08:00） |
 | `duration` | 时长（MM:SS），仅视频有效；图文/直播为空字符串 |
-| `isTop` | 是否为置顶帖（`true` / `false`） |
+| `isTop` | 是否为置顶帖（1 / 0） |
 | `likes` | 点赞数 |
 | `comments` | 评论数 |
 | `shares` | 分享数 |
 | `favorites` | 收藏数 |
-| `coins` | 0（抖音无此字段，保留用于跨平台 schema 兼容） |
-| `coverUrl` | 封面图 URL（来自 `video.cover.url_list[0]`，兜底 `origin_cover`） |
-| `imageUrls` | 图文帖的图片 URL 列表（`video` 类型时为空数组） |
-| `tags` | 话题/标签名数组（来自 `text_extra[].hashtag_name`） |
+| `tags` | 话题/标签名（空格分隔） |
 | `musicTitle` | 背景音乐标题 |
-| `musicAuthor` | 背景音乐作者 |
 
-> v3.3.1 起 CSV 列同步增加 `type, isTop, tags, musicTitle`，并补 UTF-8 BOM 确保 Excel 打开不乱码。
+### Excel 写入策略
 
-### report.html
-
-自带样式的暗色单页报告：头像、签名、统计卡片、可排序/可搜索的视频表格。直接双击在浏览器打开即可分享给非技术用户。
+- **upsert**：以 `id`（Summary） / `account_id+id`（Videos）为键更新已有行；新行追加到末尾
+- **全局排序**：Summary 按 person → followers desc；Videos 按 person → account_name → publishedAt desc
+- **原子重命名**：先写 `Douyin_All_Data.xlsx.tmp.xlsx` → 备份当前文件为 `.bak` → 原子 `rename`
+- **EBUSY 无限重试**：Excel 进程占用时每 5 秒提示一次"请关闭 Excel"，不放弃、不报错
+- **视频合并**（`2820f8f`）：再次采集时**不会**覆盖历史未抓到的视频行，只更新已有 `aweme_id` 的指标
 
 ## 技术实现
 
@@ -198,6 +258,8 @@ MS4wLjABAAAA...
 - **数据滚动**：`page.mouse.wheel()` 模拟真人滚轮 + 失败回合的 jitter scroll（上滚回弹再下滚）触发懒加载
 - **登录持久化**：浏览器配置文件 + LocalStorage 特征自动保存，下次免扫码登录
 - **终止条件**：服务器 `has_more=false` / 达到 `--limit` / 连续 8 轮滚动无新响应
+- **看板渲染**：客户端从嵌入的 JSON 渲染（`d927e1d`），解决 base64 注入 mojibake 问题（`c1c6b77`）
+- **看板模板修复**：修正 HTML 生成中转义模板字面量导致的空看板问题（`092b7cf`）
 
 ## 斜杠命令（Claude Code）
 
@@ -230,7 +292,7 @@ npx playwright install chromium
 通常是**登录态失效**或目标账号已被限制。解决（两种方式二选一）：
 
 ```bash
-# 方式一：使用 --relogin 标志（v3.3 推荐，会自动清理登录态并强制重扫码）
+# 方式一：使用 --relogin 标志（v3.4 推荐，会自动清理登录态并强制重扫码）
 node scripts/collect.mjs --account "..." --relogin
 
 # 方式二：手动删除登录态目录
@@ -241,7 +303,7 @@ node scripts/collect.mjs --account "..."
 
 ### 3. 滚动很久但视频数量不增长
 
-抖音对低频账号或新号偶发返回 `has_more=false`。脚本会在**连续 8 轮无新数据**后自动停止，是预期行为。检查 `summary.videoCount` 与 `videos.length` 是否一致：
+抖音对低频账号或新号偶发返回 `has_more=false`。脚本会在**连续 8 轮无新数据**后自动停止，是预期行为。检查 Excel 的 `Summary` sheet `videoCount` 与 `Videos` sheet 该账号行数是否一致：
 - 一致 → 该账号视频已采全
 - 不一致 → 风控介入，建议增加 `--delay 5000` 或更换网络环境重试
 
@@ -266,24 +328,53 @@ node scripts/collect.mjs --account "新账号URL" --relogin
 
 确认本机已安装 Chrome（脚本配置 `channel: "chrome"`）。如果只有 Chromium：删除 `buildBrowserOptions()` 中 `channel: "chrome"` 一行，或安装 Chrome 浏览器。
 
+### 7. Excel 写入卡住"请关闭 Excel"
+
+`Douyin_All_Data.xlsx` 正在被 Office 占用。脚本会**无限**重试（每 5 秒一次），关闭 Excel 后自动恢复。不想等可以 `Ctrl+C` 中断。
+
+### 8. 看板缺"组长看板"
+
+未配置 `config/team.json`：
+```bash
+cp config/team.example.json config/team.json
+# 编辑 config/team.json 填入你的组长 / 组员名单
+```
+
+### 9. 历史版本遗留工具 `organize_outputs.mjs`
+
+`scripts/organize_outputs.mjs` 在 v3.4 已**失效**——它依赖 `outputs/<昵称>/summary.json` 这种独立目录结构，但 v3.4 数据全部进 Excel。**不要再跑这个脚本**。
+
 ## 文件说明
 
 ```
 douyin_skill/
 ├── SKILL.md                          # 本文档
-├── README.md                         # 英文项目说明
+├── README.md                         # 项目说明
 ├── EXAMPLES.md                       # 使用示例
 ├── CHANGELOG.md                      # 版本历史
 ├── package.json
 ├── install.ps1 / install.sh          # 全局安装脚本（方式一）
 ├── setup.bat / setup.sh              # 本地依赖安装脚本（方式二）
+├── config/
+│   ├── team.example.json             # 团队配置模板
+│   └── team.json                     # 实际团队层级（gitignored，首次需从 example 复制）
 ├── .claude/
 │   └── commands/
 │       └── douyin_skill.md           # /douyin_skill 斜杠命令定义
 ├── private/profiles/douyin/          # 浏览器登录态（自动生成，git 忽略）
-├── outputs/<昵称>/                   # 采集结果（自动生成，git 忽略）
+├── outputs/                          # 采集结果（自动生成，git 忽略）
+│   ├── Douyin_All_Data.xlsx          # 【主数据源】集中式 Excel
+│   ├── dashboard.html                # 全局看板
+│   ├── person_dashboards/            # 个人看板（按负责人）
+│   └── leader_dashboards/            # 组长看板（按 team.json 层级）
+├── 账号监控_人员分组.xlsx             # 批采 / 看板用配置（gitignored）
 └── scripts/
-    ├── collect.mjs                   # v3.3 主入口（拦截器 + HTML 报告）
+    ├── collect.mjs                   # v3.4 主入口（拦截器 + Excel 写入 + 自动 dashboard）
+    ├── batch_collect.mjs             # Excel 批采入口
+    ├── dashboard.mjs                 # 三级看板生成器
+    ├── organize_outputs.mjs          # 【v3.4 失效】历史归位脚本，勿跑
+    ├── migrate_to_excel.mjs          # 历史数据一次性迁移到 Excel（可选）
+    ├── dashboard_backup.mjs          # dashboard.mjs 的历史备份
     └── adapters/
         ├── stealth.min.js            # 反检测注入脚本
         ├── douyin.mjs                # 旧版 HTTP 适配器（v2.x，已不被 collect.mjs 引用，保留供参考）
@@ -295,3 +386,4 @@ douyin_skill/
 - `playwright` (^1.60.0)
 - `playwright-extra` (^4.3.6)
 - `puppeteer-extra-plugin-stealth` (^2.11.2)
+- `xlsx` (^0.18.5)

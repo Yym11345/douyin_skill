@@ -29,10 +29,47 @@ if (!existsSync(leaderDashboardsDir)) mkdirSync(leaderDashboardsDir, { recursive
 
 // ── 动态加载团队组织架构配置 ─────────────────────────────────────────
 // 从 config/team.json 读取。首次使用请复制 config/team.example.json 并按实际组织层级修改。
+const teamTxtPath = join(projectRoot, 'config', '组织关系.txt');
 const teamConfigPath = join(projectRoot, 'config', 'team.json');
 let TEAM_HIERARCHY = {};
 
-if (existsSync(teamConfigPath)) {
+if (existsSync(teamTxtPath)) {
+    try {
+        const lines = readFileSync(teamTxtPath, 'utf8').split('\n');
+        let teamObj = {};
+        let topLeader = null;
+        let allTopLeaderMembers = new Set();
+        
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+            if (line.includes('主管：')) {
+                topLeader = line.split('主管：')[1].trim();
+                continue;
+            }
+            if (line.includes('组长：') && line.includes('组员：')) {
+                let parts = line.split('→');
+                let groupName = parts[0].trim();
+                let rest = parts[1] || '';
+                let leaderStr = rest.split(/[,，]/)[0];
+                let membersStr = rest.substring(leaderStr.length + 1);
+                let leader = leaderStr.replace('组长：', '').trim();
+                let members = membersStr.replace('组员：', '').split(/[、，, ]+/).map(s => s.trim()).filter(Boolean);
+                teamObj[groupName] = { leader, members };
+                allTopLeaderMembers.add(leader);
+                members.forEach(m => allTopLeaderMembers.add(m));
+            }
+        }
+        if (topLeader) {
+            teamObj['总管大盘'] = { leader: topLeader, members: Array.from(allTopLeaderMembers) };
+        }
+        TEAM_HIERARCHY = teamObj;
+        writeFileSync(teamConfigPath, JSON.stringify({teams: teamObj}, null, 2), 'utf8');
+        console.log(`[Dashboard] 自动将 组织关系.txt 转换为 team.json，加载了 ${Object.keys(TEAM_HIERARCHY).length} 个分组。`);
+    } catch (e) {
+        console.warn(`[Dashboard] 组织关系.txt 解析失败: ${e.message}`);
+    }
+} else if (existsSync(teamConfigPath)) {
   try {
     const raw = JSON.parse(readFileSync(teamConfigPath, 'utf8'));
     TEAM_HIERARCHY = raw.teams || {};
