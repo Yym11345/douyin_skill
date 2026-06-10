@@ -16,6 +16,19 @@ const sourceDir = process.argv[2] || outputsDir;
 
 console.log(`[Migration] 开始扫描目录: ${sourceDir}`);
 
+// Read person map from Excel
+const personMap = {};
+const groupExcelPath = join(projectRoot, '账号监控_人员分组.xlsx');
+if (existsSync(groupExcelPath)) {
+  const groupWb = XLSX.readFile(groupExcelPath);
+  if (groupWb.SheetNames.includes('按人分组')) {
+    const groupData = XLSX.utils.sheet_to_json(groupWb.Sheets['按人分组'], { header: 1 });
+    for (const row of groupData) {
+      if (row[3]) personMap[String(row[3]).trim()] = String(row[1] || '').trim();
+    }
+  }
+}
+
 // Find all summary.json and corresponding videos.json
 const summaries = [];
 const allVideos = [];
@@ -34,21 +47,10 @@ function traverse(dir) {
       try {
         const summary = JSON.parse(readFileSync(fullPath, 'utf8'));
         
-        // Infer person from the directory structure if possible
-        // typically: outputs/<person>/<account>/summary.json
-        const parts = fullPath.split(/\\|\//);
-        let person = "";
-        if (parts.length >= 3) {
-          person = parts[parts.length - 3];
-        }
-        
-        // Also look for person in summary (if it was added by someone)
-        if (summary.person) {
-          person = summary.person;
-        }
+        let person = personMap[summary.id] || "";
 
         const summaryRow = {
-          person: person !== 'outputs' && person !== 'batch_excel' ? person : "",
+          person: person,
           id: summary.id,
           name: summary.name,
           platform: summary.platform,
