@@ -146,53 +146,37 @@ function classifyVideo(likes, comments) {
 }
 
 
-// 递归查找所有的 summary.json 文件并解析出包含的信息
-function findSummaryFiles(baseDir) {
-  const summaries = [];
-  if (!existsSync(baseDir)) return summaries;
-
-  function traverse(dir) {
-    const files = readdirSync(dir);
-    for (const file of files) {
-      const fullPath = join(dir, file);
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch (e) {
-        continue;
+// 从单一 Excel 数据库文件读取数据
+function loadDatabaseData() {
+  const summaryMap = new Map();
+  const videosMap = new Map();
+  const dataDbPath = join(outputsDir, 'Douyin_All_Data.xlsx');
+  
+  if (existsSync(dataDbPath)) {
+    const dataWb = XLSX.readFile(dataDbPath);
+    if (dataWb.SheetNames.includes('Summary')) {
+      const summaries = XLSX.utils.sheet_to_json(dataWb.Sheets['Summary']);
+      for (const s of summaries) {
+        if (s.id) summaryMap.set(String(s.id), { data: s });
       }
-      if (stat.isDirectory()) {
-        traverse(fullPath);
-      } else if (file === 'summary.json') {
-        try {
-          const content = readFileSync(fullPath, 'utf8');
-          const summary = JSON.parse(content);
-          summaries.push({
-            filePath: fullPath,
-            data: summary
-          });
-        } catch (e) {
-          console.error(`读取 ${fullPath} 失败:`, e.message);
-        }
+    }
+    if (dataWb.SheetNames.includes('Videos')) {
+      const videos = XLSX.utils.sheet_to_json(dataWb.Sheets['Videos']);
+      for (const v of videos) {
+        const accId = String(v.account_id);
+        if (!videosMap.has(accId)) videosMap.set(accId, []);
+        videosMap.get(accId).push(v);
       }
     }
   }
-
-  traverse(baseDir);
-  return summaries;
+  return { summaryMap, videosMap };
 }
 
 function main() {
   console.log('[Dashboard] 开始读取数据并生成 VAM 团队监控矩阵...');
 
-  // 1. 读取所有的 summary.json 并映射
-  const summaryMap = new Map();
-  const diskSummaries = findSummaryFiles(outputsDir);
-  for (const s of diskSummaries) {
-    if (s.data && s.data.id) {
-      summaryMap.set(s.data.id, s);
-    }
-  }
+  // 1. 读取采集到的数据库 (Excel版)
+  const { summaryMap, videosMap } = loadDatabaseData();
 
   // 2. 读取 Excel 配置文件
   if (!existsSync(excelPath)) {
@@ -245,43 +229,14 @@ function main() {
   let totalVideosCount = 0;
   let totalNeedsMaintenance = 0;
 
-  // 3. 关联并分析视频明细
-  const finalAccounts = excelAccounts.map(acct => {
-    // 优先通过 sec_user_id 匹配
+    // 3. 关联并分析视频明细
+    const finalAccounts = excelAccounts.map(acct => {
+    // 通过 sec_user_id 匹配
     let match = summaryMap.get(acct.sec_user_id);
     
-    // 找不到就尝试通过人名+文件夹名匹配
-    if (!match) {
-      const parts = (acct.outputPath || '').split('/');
-      const folderName = parts[parts.length - 1];
-      if (folderName) {
-        const altPath = join(outputsDir, acct.person, folderName, 'summary.json');
-        if (existsSync(altPath)) {
-          try {
-            match = { filePath: altPath, data: JSON.parse(readFileSync(altPath, 'utf8')) };
-          } catch (e) {}
-        }
-      }
-    }
-
     const realData = match ? match.data : null;
-    const summaryPath = match ? match.filePath : null;
-
-    let videos = [];
-    let isCollected = false;
-
-    if (summaryPath) {
-      isCollected = true;
-      const folderDir = dirname(summaryPath);
-      const videosPath = join(folderDir, 'videos.json');
-      if (existsSync(videosPath)) {
-        try {
-          videos = JSON.parse(readFileSync(videosPath, 'utf8'));
-        } catch (e) {
-          console.error(`读取 ${videosPath} 失败:`, e.message);
-        }
-      }
-    }
+    let videos = match ? (videosMap.get(acct.sec_user_id) || []) : [];
+    let isCollected = !!match;
 
     // 分析所有视频并判定评级
     let needsMaintenanceCount = 0;
@@ -342,12 +297,8 @@ function main() {
     // 格式化展示的粉丝/赞数/比率
     const ratioStr = likes > 0 ? ((comments / likes) * 100).toFixed(1) + '%' : '0.0%';
 
-    // 计算 reportUrl 相对路径
-    let reportUrl = '#';
-    if (summaryPath) {
-      const relativeFolder = summaryPath.slice(outputsDir.length + 1).replace(/\\/g, '/');
-      reportUrl = './' + relativeFolder.replace('summary.json', 'report.html');
-    }
+    // 计算 reportUrl (现统一跳往抖音主页)
+    let reportUrl = realData ? realData.url : acct.url;
 
     return {
       index: acct.index,

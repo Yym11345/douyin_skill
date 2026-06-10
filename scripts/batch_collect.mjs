@@ -69,12 +69,11 @@ function main() {
     console.log(`\n======================================================================`);
     console.log(`[Batch] [${i + 1}/${accounts.length}] 正在采集: ${acct.name} (归属: ${acct.person})`);
     console.log(`[Batch] sec_user_id: ${acct.sec_user_id}`);
-    console.log(`[Batch] 输出目录: ${acct.outputPath}`);
     console.log(`======================================================================`);
 
     try {
-      // 执行单账号采集命令并指定输出目录，按负责人进行物理分类
-      execSync(`node scripts/collect.mjs --account ${acct.sec_user_id} --limit 200 --out "${acct.outputPath}"`, { stdio: 'inherit' });
+      // 执行单账号采集命令并传入负责人参数，统一存入单文件 Excel
+      execSync(`node scripts/collect.mjs --account ${acct.sec_user_id} --limit 200 --person "${acct.person}"`, { stdio: 'inherit' });
     } catch (err) {
       console.error(`[Batch] 账号 ${acct.name} 采集失败:`, err.message);
     }
