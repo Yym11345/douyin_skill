@@ -189,8 +189,6 @@ function generatePersonHtml(person, accounts, videos, updateTime) {
     </tbody></table></div></div>`;
     });
 
-        const tiersJsonBase64 = Buffer.from(JSON.stringify(tiers)).toString('base64');
-    
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -299,8 +297,8 @@ ${tiersContentHtml}
 </div>
 
 <script>
-  // Decode and parse the JSON data injected from the server
-  const PAGE_DATA = JSON.parse(atob('${tiersJsonBase64}'));
+  // Directly inject the JSON data from the server, safely encoding < to prevent script breakage
+  const PAGE_DATA = ${JSON.stringify(tiers).replace(/</g, '\\u003c')};
   
   function htmlEscape(str) {
       return String(str || '')
