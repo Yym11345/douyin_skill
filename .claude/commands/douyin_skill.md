@@ -32,14 +32,20 @@ argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relog
 
 ## 执行步骤
 
-1. **解析参数** — 从 `$ARGUMENTS` 中提取账号和可选参数；如果第一个参数像是抖音主页 URL 而非 sec_user_id，原样传给 `--account`。`--person` 仅在用户明确指定时传入，批采时由 `batch_collect.mjs` 注入。
+1. **解析参数** — 从 `$ARGUMENTS` 中提取账号和可选参数：
+   - 第一个参数（URL 或 sec_user_id）传给 `--account`
+   - 其余可选参数（`--limit`、`--delay`、`--relogin`、`--person`）原样追加
 
-2. **在项目根目录运行采集器**：
+2. **定位项目根目录** — 本项目脚本使用 `__dirname` 解析所有路径，所以**无需 cd**，直接用以下绝对路径运行：
 
    - **单账号（最常见）**：
      ```bash
      node scripts/collect.mjs --account <url或sec_user_id> [--limit N] [--delay MS] [--relogin] [--person 负责人]
      ```
+     > 如果项目**不是当前 Workspace**（全局安装模式），用安装路径替换：
+     > ```bash
+     > node "/path/to/douyin_skill/scripts/collect.mjs" --account <url> [其他参数]
+     > ```
      完成后会**自动**追加到 `outputs/Douyin_All_Data.xlsx` 并刷新全部看板。
 
    - **批量（用户给了 Excel 路径）**：
@@ -48,26 +54,25 @@ argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relog
        ```bash
        node scripts/batch_collect.mjs
        ```
-     - 脚本会按 `序号 > 0 && sec_user_id 非空` 过滤，**顺序**（不并发）逐个 `execSync` 调用 collect.mjs 并自动传入 `--person`，单账号失败不中断后续
+     - 脚本会按 `序号 > 0 && sec_user_id 非空` 过滤，**顺序**（不并发）逐个调用 collect.mjs 并自动传入 `--person`
      - 全部完成后自动 `node scripts/dashboard.mjs`
 
    - **仅刷新看板（数据没动）**：
      ```bash
      node scripts/dashboard.mjs
      ```
-     适用：手工编辑过 `config/team.json`、或外部修改了 `Douyin_All_Data.xlsx` 后想重新生成页面
+     适用：外部修改了 `Douyin_All_Data.xlsx` 或 `config/组织关系.txt` 后想重新生成页面
 
 3. **采集成功后**，输出以下摘要：
    - 账号昵称 + sec_user_id
    - 粉丝数、总赞数、总评论数
    - 已采集帖数（/总帖数），并按内容类型拆分：`video:180  image_text:18  live_replay:2`
-   - 提示用户打开 `outputs/dashboard.html` 查看全局看板，`outputs/person_dashboards/<name>.html` 查看该负责人看板
-   - 封面图、标签、音乐等附加字段在 `outputs/Douyin_All_Data.xlsx` 的 `Videos` sheet
+   - 提示用户打开 `outputs/dashboard.html` 查看全局看板
 
 4. **常见错误处理**：
    - `--account is required` → 提示用户传入账号 URL 或 sec_user_id
    - `Failed to capture user profile` → 登录状态已过期，提示用户加 `--relogin` 重跑
-   - 浏览器弹出但无数据 → 删除 `./private/profiles/douyin/` 后重新扫码（或直接加 `--relogin`）
+   - 浏览器弹出但无数据 → 直接加 `--relogin`，或删除 `./private/profiles/douyin/` 后重跑
    - `HTTP 412 / 403` → 风控触发，建议 `--delay 5000` 并减小 `--limit`
    - `channel "chrome"` 相关错误 → 本机没有 Google Chrome，引导用户跑 `install.ps1` / `install.sh`
    - Excel 写入卡住（脚本会循环打"请关闭 Excel"） → 关闭 Office 占用 `outputs/Douyin_All_Data.xlsx` 的进程

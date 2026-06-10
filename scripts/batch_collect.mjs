@@ -73,7 +73,8 @@ function main() {
 
     try {
       // 执行单账号采集命令并传入负责人参数，统一存入单文件 Excel
-      execSync(`node scripts/collect.mjs --account ${acct.sec_user_id} --limit 200 --person "${acct.person}"`, { stdio: 'inherit' });
+      const collectScript = join(__dirname, 'collect.mjs');
+      execSync(`node "${collectScript}" --account ${acct.sec_user_id} --limit 200 --person "${acct.person}"`, { stdio: 'inherit' });
     } catch (err) {
       console.error(`[Batch] 账号 ${acct.name} 采集失败:`, err.message);
     }
@@ -83,8 +84,10 @@ function main() {
 
   // 批量采集完成后自动重新生成所有看板
   try {
-    execSync('node scripts/dashboard.mjs', { stdio: 'inherit' });
+    const dashboardScript = join(__dirname, 'dashboard.mjs');
+    execSync(`node "${dashboardScript}"`, { stdio: 'inherit' });
     console.log('\n[Batch] 监控面板已更新完成！');
+    console.log(`\n[Batch] 请打开 outputs/dashboard.html 查看全局总看板`);
   } catch (dashErr) {
     console.error('[Batch] 看板生成失败，请手动运行: node scripts/dashboard.mjs');
     console.error(dashErr.message);

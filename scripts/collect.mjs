@@ -1065,7 +1065,8 @@ function sanitizeName(name) {
     try {
       console.log("\n[Dashboard] 正在自动更新全局监控面板...");
       const { execSync } = await import("node:child_process");
-      execSync("node scripts/dashboard.mjs", { stdio: "inherit" });
+      const dashboardScript = join(__dirname, 'dashboard.mjs');
+      execSync(`node "${dashboardScript}"`, { stdio: "inherit" });
     } catch (dashboardErr) {
       console.error("[Dashboard] 自动更新面板失败:", dashboardErr.message);
     }
