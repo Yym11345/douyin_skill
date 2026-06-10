@@ -109,21 +109,21 @@ mkdir -p "$COMMANDS_DIR"
 
 cat > "$COMMANDS_DIR/douyin_skill.md" << CMDEOF
 ---
-description: 采集抖音创作者账号数据 — 粉丝数、视频列表（点赞/播放/评论/分享）、导出 JSON/CSV/HTML 报告
-argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relogin] [--profile 路径]
+description: 采集抖音创作者账号数据 — 粉丝数、视频/图文/直播列表（点赞/评论/分享），集中写入 outputs/Douyin_All_Data.xlsx 并自动刷新三级监控看板
+argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relogin] [--person 负责人]
 ---
 
 # /douyin_skill
 
-采集抖音创作者账号的完整数据，输出 summary.json / videos.json / videos.csv / report.html。
+采集抖音创作者账号数据，写入集中式 Excel \`outputs/Douyin_All_Data.xlsx\`，并自动刷新三级监控看板（全局 / 个人 / 组长）。
 
 ## 参数
 
 - 第一个参数：抖音主页 URL 或 sec_user_id（必填）
+- \`--person 负责人\`：负责人姓名，写入 Excel 归人字段
 - \`--limit N\`：最多采集多少条视频（默认 200）
 - \`--delay MS\`：每轮滚动等待毫秒数（默认 2000）
 - \`--relogin\`：清除登录状态，重新扫码
-- \`--profile 路径\`：使用独立 profile（多账号切换）
 
 ## 执行
 
@@ -133,18 +133,13 @@ argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relog
 node "$INSTALL_DIR/scripts/collect.mjs" \$ARGUMENTS
 \`\`\`
 
-## 采集成功后输出
-
-- 账号昵称 + sec_user_id
-- 粉丝数、获赞数
-- 已采集视频数 / 总视频数
-- 输出目录路径（提示用户打开 report.html）
-
 ## 常见错误
 
 - \`--account is required\` → 提示用户传入账号 URL
 - 浏览器弹出但无数据 → 登录过期，建议加 \`--relogin\`
 - \`HTTP 412/403\` → 风控，建议 \`--delay 5000\`
+- Excel 卡住 → 关闭正在打开 Douyin_All_Data.xlsx 的 Office 进程
+- 缺少组长看板 → 引导用户创建 \`config/组织关系.txt\`
 CMDEOF
 
 echo "[✓] Claude Code 命令已注册：$COMMANDS_DIR/douyin_skill.md"

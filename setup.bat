@@ -2,7 +2,7 @@
 chcp 65001 >nul
 echo.
 echo  ╔══════════════════════════════════════╗
-echo  ║     douyin-skill  v3.2  Setup       ║
+echo  ║     douyin-skill  v3.4  Setup       ║
 echo  ╚══════════════════════════════════════╝
 echo.
 

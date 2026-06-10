@@ -94,42 +94,38 @@ $InstallDirFwd = $InstallDir.Replace("\", "/")
 
 $CommandContent = @"
 ---
-description: Collect Douyin creator account data - followers, video list (likes/views/comments/shares), exports JSON/CSV/HTML report
-argument-hint: <douyin-url-or-sec-user-id> [--limit N] [--delay ms] [--relogin] [--profile path]
+description: 采集抖音创作者账号数据 — 粉丝数、视频/图文/直播列表（点赞/评论/分享），集中写入 outputs/Douyin_All_Data.xlsx 并自动刷新三级监控看板
+argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relogin] [--person 负责人]
 ---
 
 # /douyin_skill
 
-Collect complete Douyin creator account data, outputs summary.json / videos.json / videos.csv / report.html.
+采集抖音创作者账号数据，写入集中式 Excel ``outputs/Douyin_All_Data.xlsx``，并自动刷新三级监控看板（全局 / 个人 / 组长）。
 
-## Arguments
+## 参数
 
-- First argument: Douyin profile URL or sec_user_id (required)
-- ``--limit N``: max videos to collect (default 200)
-- ``--delay MS``: max ms to wait per scroll round (default 2000)
-- ``--relogin``: clear saved login, force QR scan again
-- ``--profile path``: use separate browser profile (for multiple accounts)
+- 第一个参数：抖音主页 URL 或 sec_user_id（必填）
+- ``--person 负责人``：负责人姓名，写入 Excel 归人字段
+- ``--limit N``：最多采集多少条视频（默认 200）
+- ``--delay MS``：每轮滚动等待毫秒数（默认 2000）
+- ``--relogin``：清除登录状态，强制重新扫码
+- ``--profile DIR``：浏览器 Profile 目录（多账号时为每个账号指定独立目录）
 
-## Run
+## 执行
 
-Skill installed at: $InstallDir
+Skill 安装路径: $InstallDir
 
 ``````bash
-node "$InstallDirFwd/scripts/collect.mjs" `$ARGUMENTS
+node "$InstallDirFwd/scripts/collect.mjs" --account `$ARGUMENTS
 ``````
 
-## On success, report
+## 常见错误
 
-- Account nickname + sec_user_id
-- Followers, total likes
-- Videos fetched / total video count
-- Output directory (prompt user to open report.html)
-
-## Common errors
-
-- ``--account is required`` -> ask user to provide account URL
-- Browser opens but no data captured -> session expired, suggest ``--relogin``
-- ``HTTP 412/403`` -> risk control, suggest ``--delay 5000``
+- ``--account is required`` → 提示用户传入账号 URL
+- 浏览器弹出但无数据 → 登录过期，建议加 ``--relogin`` 重跑
+- ``HTTP 412/403`` → 风控，建议 ``--delay 5000``
+- Excel 卡住 → 关闭正在打开 Douyin_All_Data.xlsx 的 Office 进程
+- 缺少组长看板 → 引导用户创建 ``config/组织关系.txt``
 "@
 
 $CommandFile = Join-Path $CommandsDir "douyin_skill.md"
@@ -144,21 +140,9 @@ if ($InstallAntigravity) {
         New-Item -ItemType Directory -Force -Path $AntigravityPluginsDir | Out-Null
         $AntigravitySkillDir = Join-Path $AntigravityPluginsDir "douyin_skill"
         
-        # Windows doesn't easily support symlinks without admin rights, so we create a proxy SKILL.md
-        if (!(Test-Path $AntigravitySkillDir)) {
-            New-Item -ItemType Directory -Force -Path $AntigravitySkillDir | Out-Null
-        }
-        
-        $AntigravitySkillContent = @"
----
-name: douyin_skill
-description: Use when collecting Douyin (抖音) creator account metrics. Delegates execution to the actual tool located at $InstallDir.
----
-# Douyin Skill (Proxy)
-This skill is installed at `$InstallDir`. Please run the scripts from there.
-"@
+        # Copy the full SKILL.md so Antigravity can read complete skill instructions
         $AntigravitySkillFile = Join-Path $AntigravitySkillDir "SKILL.md"
-        [System.IO.File]::WriteAllText($AntigravitySkillFile, $AntigravitySkillContent, [System.Text.Encoding]::UTF8)
+        Copy-Item "$InstallDir\SKILL.md" $AntigravitySkillFile -Force
         Write-Host "  [OK] Antigravity skill registered at: $AntigravitySkillDir" -ForegroundColor Green
     }
 }
