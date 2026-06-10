@@ -81,7 +81,6 @@ function loadDatabaseData() {
   const videosMap = new Map();
   const dataDbPath = join(outputsDir, 'Douyin_All_Data.xlsx');
   
-  // 1. Load legacy Excel data to preserve historical data
   if (existsSync(dataDbPath)) {
     try {
       const dataWb = XLSX.readFile(dataDbPath);
@@ -99,83 +98,12 @@ function loadDatabaseData() {
           videosMap.get(accId).push(v);
         }
       }
-      console.log(`[Dashboard] 成功加载历史数据：${summaryMap.size} 个账号`);
+      console.log(`[Dashboard] 成功加载全局 Excel 数据：${summaryMap.size} 个账号`);
     } catch (e) {
-      console.error(`[Dashboard] 警告：无法读取历史 Excel 数据 (${e.message})`);
+      console.error(`[Dashboard] 读取 Excel 数据失败 (可能文件已损坏或被独占锁定): ${e.message}`);
     }
-  }
-
-  // 2. Scan all JSON files in outputs/ for new/updated data
-  const entries = require('node:fs').readdirSync(outputsDir);
-  for (const entry of entries) {
-    const fullPath = join(outputsDir, entry);
-    let stat;
-    try { stat = require('node:fs').statSync(fullPath); } catch { continue; }
-    if (!stat.isDirectory()) continue;
-    if (['person_dashboards', 'leader_dashboards'].includes(entry)) continue;
-    
-    const summaryPath = join(fullPath, 'summary.json');
-    const videosPath = join(fullPath, 'videos.json');
-    
-    if (existsSync(summaryPath)) {
-      try {
-        const s = JSON.parse(require('node:fs').readFileSync(summaryPath, 'utf8'));
-        
-        let accountPerson = "未分配";
-        const urlsPath = join(projectRoot, 'urls_by_person.json');
-        if (existsSync(urlsPath)) {
-           try {
-             const mapping = JSON.parse(require('node:fs').readFileSync(urlsPath, 'utf8'));
-             for (const [p, urls] of Object.entries(mapping)) {
-                if (urls.includes(s.url) || urls.some(u => String(u).includes(s.id))) {
-                   accountPerson = p; break;
-                }
-             }
-           } catch {}
-        }
-
-        s.person = accountPerson;
-        if (s.id) summaryMap.set(String(s.id), { data: s });
-        
-        if (existsSync(videosPath)) {
-          const vids = JSON.parse(require('node:fs').readFileSync(videosPath, 'utf8'));
-          const accId = String(s.id);
-          const mappedVids = vids.map(v => ({
-             ...v, account_name: s.name, account_id: s.id, person: accountPerson
-          }));
-          
-          // Overwrite videos for this account completely
-          videosMap.set(accId, mappedVids);
-        }
-      } catch (e) {
-        console.error(`[Dashboard] 解析 JSON 错误: ${entry} - ${e.message}`);
-      }
-    }
-  }
-
-  // 3. Rewrite the Excel file (Data Warehouse capability)
-  try {
-    console.log(`[Dashboard] 正在汇总 ${summaryMap.size} 个账号的数据到 Excel...`);
-    const summaryData = Array.from(summaryMap.values()).map(v => v.data);
-    const videoData = [];
-    for (const vids of videosMap.values()) {
-        videoData.push(...vids);
-    }
-    
-    const wb = XLSX.utils.book_new();
-    const sumWs = XLSX.utils.json_to_sheet(summaryData);
-    const vidWs = XLSX.utils.json_to_sheet(videoData);
-    XLSX.utils.book_append_sheet(wb, sumWs, 'Summary');
-    XLSX.utils.book_append_sheet(wb, vidWs, 'Videos');
-    
-    // Attempt to write
-    const tempPath = dataDbPath + '.tmp.xlsx';
-    XLSX.writeFile(wb, tempPath);
-    if (existsSync(dataDbPath)) require('node:fs').renameSync(dataDbPath, dataDbPath + '.bak');
-    require('node:fs').renameSync(tempPath, dataDbPath);
-    if (existsSync(dataDbPath + '.bak')) require('node:fs').unlinkSync(dataDbPath + '.bak');
-  } catch (e) {
-    console.error(`[Dashboard] 写入汇总 Excel 失败 (如果 Excel 已打开请关闭它): ${e.message}`);
+  } else {
+    console.warn(`[Dashboard] 警告：未找到 Douyin_All_Data.xlsx`);
   }
 
   return { summaryMap, videosMap };

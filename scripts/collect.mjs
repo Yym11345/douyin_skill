@@ -913,75 +913,120 @@ function sanitizeName(name) {
       fetchedAt: new Date().toISOString(),
     };
 
-    // Resolve final output directory: prefer --out, then smart overwrite, then nickname
-    if (!outDir) {
-      // Step 1: scan all existing outputs/ subdirectories
-      const outputsRoot = join(__dirname, "..", "outputs");
-      const existingDir = findExistingAccountDir(outputsRoot, secUserId);
-      if (existingDir) {
-        outDir = existingDir;
-        console.log(`[Output] 已找到该账号的历史数据目录：${outDir}`);
-        console.log(`[Output] 本次采集数据将直接覆盖历史数据。`);
-      } else {
-        // Step 2: new account — use nickname as directory name
-        const nickname = sanitizeName(userInfo.nickname || "");
-        const baseName = nickname || secUserId;
-        let candidate = join("./outputs", baseName);
-        if (existsSync(candidate)) {
-          try {
-            const existing = JSON.parse(readFileSync(join(candidate, "summary.json"), "utf8"));
-            if (existing.id !== secUserId) {
-              candidate = `${candidate}_${secUserId.slice(0, 12)}`;
-            }
-          } catch { /* ignore */ }
-        }
-        outDir = candidate;
-      }
+    // ── Update Single Excel Output ────────────────────────────────────
+    const excelPath = join(__dirname, '..', 'outputs', 'Douyin_All_Data.xlsx');
+    
+    // We import XLSX dynamically or require it if not done
+    const XLSX = require('xlsx');
+
+    let wb;
+    if (existsSync(excelPath)) {
+      wb = XLSX.readFile(excelPath);
+    } else {
+      wb = XLSX.utils.book_new();
     }
 
-    // Save results
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
-    writeFileSync(join(outDir, "videos.json"), JSON.stringify(videos, null, 2), "utf8");
+    const summarySheetName = 'Summary';
+    const videoSheetName = 'Videos';
 
-    // CSV — include new fields
-    const csvHeader = "id,type,title,url,publishedAt,duration,isTop,likes,comments,shares,favorites,tags,musicTitle";
-    const csvRows = videos.map((v) =>
-      [
-        v.id,
-        v.type,
-        `"${String(v.title).replace(/"/g, '""')}"`,
-        v.url,
-        v.publishedAt,
-        v.duration,
-        v.isTop ? "1" : "0",
-        v.likes,
-        v.comments,
-        v.shares,
-        v.favorites,
-        `"${(v.tags || []).join(" ")}"`,
-        `"${String(v.musicTitle || "").replace(/"/g, '""')}"`,
-      ].join(",")
-    );
-    writeFileSync(join(outDir, "videos.csv"), "\ufeff" + [csvHeader, ...csvRows].join("\n"), "utf8");
+    // Update Summary Sheet
+    let summaryData = [];
+    if (wb.SheetNames.includes(summarySheetName)) {
+      summaryData = XLSX.utils.sheet_to_json(wb.Sheets[summarySheetName]);
+    }
+    const summaryRow = {
+      person: args.person || '',
+      id: summary.id,
+      name: summary.name,
+      platform: summary.platform,
+      followers: summary.followers,
+      videoCount: summary.videoCount,
+      totalLikes: summary.totalLikes,
+      totalComments: summary.totalComments,
+      url: summary.url,
+      fetchedAt: summary.fetchedAt
+    };
+    const existingSummaryIdx = summaryData.findIndex(r => String(r.id) === String(summary.id));
+    if (existingSummaryIdx >= 0) summaryData[existingSummaryIdx] = summaryRow;
+    else summaryData.push(summaryRow);
 
-    // HTML Report
-    const htmlReport = generateHtmlReport(summary, videos, userInfo);
-    writeFileSync(join(outDir, "report.html"), htmlReport, "utf8");
+    const newSummaryWs = XLSX.utils.json_to_sheet(summaryData);
+    if (wb.SheetNames.includes(summarySheetName)) wb.Sheets[summarySheetName] = newSummaryWs;
+    else XLSX.utils.book_append_sheet(wb, newSummaryWs, summarySheetName);
+
+    // Update Videos Sheet
+    let videoData = [];
+    if (wb.SheetNames.includes(videoSheetName)) {
+      videoData = XLSX.utils.sheet_to_json(wb.Sheets[videoSheetName]);
+    }
+    // Remove old videos for this account
+    videoData = videoData.filter(v => String(v.account_id) !== String(summary.id));
+    // Append new videos
+    const newVideoRows = videos.map(v => ({
+      person: args.person || '',
+      account_name: summary.name,
+      account_id: summary.id,
+      id: v.id,
+      type: v.type,
+      title: String(v.title || '').slice(0, 32767), // Prevent Excel cell length overflow
+      url: v.url,
+      publishedAt: v.publishedAt,
+      duration: v.duration,
+      isTop: v.isTop ? 1 : 0,
+      likes: v.likes,
+      comments: v.comments,
+      shares: v.shares,
+      favorites: v.favorites,
+      tags: (v.tags || []).join(' '),
+      musicTitle: v.musicTitle || ''
+    }));
+    videoData.push(...newVideoRows);
+
+    const newVideoWs = XLSX.utils.json_to_sheet(videoData);
+    if (wb.SheetNames.includes(videoSheetName)) wb.Sheets[videoSheetName] = newVideoWs;
+    else XLSX.utils.book_append_sheet(wb, newVideoWs, videoSheetName);
+
+    // ── Atomic Write with Retry Loop to fix EBUSY (Excel Locking) ──────────────
+    mkdirSync(join(__dirname, '..', 'outputs'), { recursive: true });
+    const tempPath = excelPath + '.tmp.xlsx';
+    
+    let saved = false;
+    let retries = 0;
+    while (!saved) {
+      try {
+        XLSX.writeFile(wb, tempPath);
+        if (existsSync(excelPath)) require('node:fs').renameSync(excelPath, excelPath + '.bak');
+        require('node:fs').renameSync(tempPath, excelPath);
+        if (existsSync(excelPath + '.bak')) {
+          try { require('node:fs').unlinkSync(excelPath + '.bak'); } catch(_) {}
+        }
+        saved = true;
+      } catch (writeErr) {
+        if (writeErr.code === 'EBUSY' || writeErr.message.includes('EBUSY') || writeErr.message.includes('busy') || writeErr.message.includes('locked')) {
+          console.warn(`\n[警告] Excel文件 'Douyin_All_Data.xlsx' 正在被其他程序(如Excel)占用！`);
+          console.warn(`[警告] 请立即关闭该 Excel 文件。系统将在 5 秒后自动重试保存...`);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000); // sync sleep for 5 seconds
+          retries++;
+        } else {
+          try { require('node:fs').unlinkSync(tempPath); } catch(_) {}
+          throw new Error(`Excel 写入失败: ${writeErr.message}`);
+        }
+      }
+    }
 
     // Summary
     const typeCount = {};
     for (const v of videos) typeCount[v.type] = (typeCount[v.type] || 0) + 1;
-    const typeStr = Object.entries(typeCount).map(([t, n]) => `${t}:${n}`).join("  ");
+    const typeStr = Object.entries(typeCount).map(([t, n]) => `${t}:${n}`).join('  ');
 
-    console.log("\n[douyin_skill v3.3] Done!");
+    console.log('\n[douyin_skill v3.4] Done!');
     console.log(`  Account : ${summary.name} (${summary.id})`);
     console.log(`  Followers: ${summary.followers.toLocaleString()}`);
     console.log(`  Posts   : ${videos.length} fetched (total: ${summary.videoCount})`);
     console.log(`  Types   : ${typeStr}`);
     console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
     console.log(`  Comments: ${summary.totalComments.toLocaleString()}`);
-    console.log(`  Output  : ${outDir}`);
+    console.log(`  Output  : Excel 数据已成功追加到 outputs/Douyin_All_Data.xlsx`);
 
     // Automatically generate/update dashboard
     try {
