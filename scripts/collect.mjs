@@ -950,6 +950,13 @@ function sanitizeName(name) {
     if (existingSummaryIdx >= 0) summaryData[existingSummaryIdx] = summaryRow;
     else summaryData.push(summaryRow);
 
+    summaryData.sort((a, b) => {
+      const pA = String(a.person || '');
+      const pB = String(b.person || '');
+      if (pA !== pB) return pA.localeCompare(pB);
+      return (Number(b.followers) || 0) - (Number(a.followers) || 0);
+    });
+    
     const newSummaryWs = XLSX.utils.json_to_sheet(summaryData);
     if (wb.SheetNames.includes(summarySheetName)) wb.Sheets[summarySheetName] = newSummaryWs;
     else XLSX.utils.book_append_sheet(wb, newSummaryWs, summarySheetName);
@@ -959,14 +966,12 @@ function sanitizeName(name) {
     if (wb.SheetNames.includes(videoSheetName)) {
       videoData = XLSX.utils.sheet_to_json(wb.Sheets[videoSheetName]);
     }
-    // Remove old videos for this account
-    videoData = videoData.filter(v => String(v.account_id) !== String(summary.id));
-    // Append new videos
+    // Map new videos for merging
     const newVideoRows = videos.map(v => ({
       person: args.person || '',
       account_name: summary.name,
       account_id: summary.id,
-      id: v.id,
+      id: String(v.id),
       type: v.type,
       title: String(v.title || '').slice(0, 32767), // Prevent Excel cell length overflow
       url: v.url,
@@ -980,7 +985,34 @@ function sanitizeName(name) {
       tags: (v.tags || []).join(' '),
       musicTitle: v.musicTitle || ''
     }));
-    videoData.push(...newVideoRows);
+
+    // MERGE: Upsert videos to preserve historical un-scraped videos
+    const newVideosMap = new Map(newVideoRows.map(v => [String(v.id), v]));
+    for (let i = 0; i < videoData.length; i++) {
+        const existingId = String(videoData[i].id);
+        if (newVideosMap.has(existingId)) {
+            // Overwrite existing row with fresh metrics
+            videoData[i] = newVideosMap.get(existingId);
+            newVideosMap.delete(existingId);
+        }
+    }
+    // Push the remaining fully new videos
+    videoData.push(...newVideosMap.values());
+
+    // SORTING: globally sort by Person -> Account Name -> Published Date (Descending)
+    videoData.sort((a, b) => {
+        const pA = String(a.person || '');
+        const pB = String(b.person || '');
+        if (pA !== pB) return pA.localeCompare(pB);
+        
+        const cA = String(a.account_name || '');
+        const cB = String(b.account_name || '');
+        if (cA !== cB) return cA.localeCompare(cB);
+        
+        const dA = String(a.publishedAt || '');
+        const dB = String(b.publishedAt || '');
+        return dB.localeCompare(dA);
+    });
 
     const newVideoWs = XLSX.utils.json_to_sheet(videoData);
     if (wb.SheetNames.includes(videoSheetName)) wb.Sheets[videoSheetName] = newVideoWs;
