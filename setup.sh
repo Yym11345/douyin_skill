@@ -3,7 +3,7 @@ set -e
 
 echo ""
 echo " ╔══════════════════════════════════════╗"
-echo " ║     douyin-skill  v3.4  Setup       ║"
+echo " ║     douyin-skill  v3.5  Setup       ║"
 echo " ╚══════════════════════════════════════╝"
 echo ""
 

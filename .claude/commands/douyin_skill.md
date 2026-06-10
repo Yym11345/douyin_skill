@@ -111,5 +111,4 @@ argument-hint: <抖音主页URL或sec_user_id> [--limit N] [--delay ms] [--relog
 - 采集进度实时打印，每 18 条视频为一批
 - 视频类型细分：`video` / `image_text` / `live_replay` / `live`（由 `aweme_type` 映射：0/4=video，2/68=image_text，61=live_replay，51=live）
 - `duration` 字段单位为秒
-- **已废弃**：`scripts/organize_outputs.mjs` 在 v3.4 已失效（collect.mjs 不再写独立 `summary.json` 目录），**不要**再推荐用户跑它
 - `账号监控_人员分组.xlsx` 已在 `.gitignore` 屏蔽，是纯本地配置，不会被 commit

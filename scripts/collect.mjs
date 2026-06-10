@@ -20,6 +20,11 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSy
 import { mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { openDb, upsertAccount, upsertVideos } from "./db.mjs";
+
+const require = createRequire(import.meta.url);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -637,7 +642,8 @@ function sanitizeName(name) {
 
 (async () => {
   const secUserId = extractSecUserId(args.account);
-  const profileDir = args.profile || "./private/profiles/douyin";
+  const defaultProfile = join(homedir(), ".douyin_skill", "profiles", "douyin");
+  const profileDir = args.profile || defaultProfile;
   const limit = args.limit ? parseInt(args.limit, 10) : 200;
   const delay = args.delay ? parseInt(args.delay, 10) : 2000;
   // outDir is let so we can update it to the creator's nickname after capture
@@ -666,17 +672,25 @@ function sanitizeName(name) {
     console.log("[Browser] Using system Google Chrome.");
   } catch (chromeErr) {
     if (
-      chromeErr.message.includes("chrome") ||
+      chromeErr.message.includes("Executable not found") ||
       chromeErr.message.includes("channel") ||
-      chromeErr.message.includes("executable") ||
-      chromeErr.message.includes("not found")
+      chromeErr.message.includes("not supported")
     ) {
       console.error("\n[错误] 未检测到系统 Google Chrome，请先安装后重试。");
       console.error("\n  下载地址：https://www.google.com/chrome/");
       console.error("  安装完成后无需额外配置，直接重新运行即可。\n");
       process.exit(1);
+    } else {
+      console.error("\n[错误] 浏览器启动失败（Target page, context or browser has been closed）。");
+      console.error("  原因通常为：");
+      console.error("  1. 浏览器配置文件目录正在被其他运行中的 Chrome 进程独占锁定。");
+      console.error("  2. 系统后台存在残留的 Chrome 僵尸进程。");
+      console.error("  ");
+      console.error("  【如何解决】");
+      console.error("  - 请关闭所有已打开的 Chrome 浏览器窗口。");
+      console.error("  - 如果问题依旧，请打开任务管理器，强制结束所有 chrome.exe 进程（或重启电脑）后重新运行。\n");
+      process.exit(1);
     }
-    throw chromeErr;
   }
 
   try {
@@ -914,152 +928,62 @@ function sanitizeName(name) {
       fetchedAt: new Date().toISOString(),
     };
 
-    // ── Update Single Excel Output ────────────────────────────────────
-    const excelPath = join(__dirname, '..', 'outputs', 'Douyin_All_Data.xlsx');
-    
-    // We import XLSX dynamically or require it if not done
-    const XLSX = require('xlsx');
+    // ── Write to SQLite (replaces Excel write, no file-locking issues) ────────
+    const db = openDb();
 
-    let wb;
-    if (existsSync(excelPath)) {
-      wb = XLSX.readFile(excelPath);
-    } else {
-      wb = XLSX.utils.book_new();
-    }
-
-    const summarySheetName = 'Summary';
-    const videoSheetName = 'Videos';
-
-    // Update Summary Sheet
-    let summaryData = [];
-    if (wb.SheetNames.includes(summarySheetName)) {
-      summaryData = XLSX.utils.sheet_to_json(wb.Sheets[summarySheetName]);
-    }
-    const summaryRow = {
-      person: args.person || '',
-      id: summary.id,
-      name: summary.name,
-      platform: summary.platform,
-      followers: summary.followers,
-      videoCount: summary.videoCount,
-      totalLikes: summary.totalLikes,
-      totalComments: summary.totalComments,
-      url: summary.url,
-      fetchedAt: summary.fetchedAt
-    };
-    const existingSummaryIdx = summaryData.findIndex(r => String(r.id) === String(summary.id));
-    if (existingSummaryIdx >= 0) summaryData[existingSummaryIdx] = summaryRow;
-    else summaryData.push(summaryRow);
-
-    summaryData.sort((a, b) => {
-      const pA = String(a.person || '');
-      const pB = String(b.person || '');
-      if (pA !== pB) return pA.localeCompare(pB);
-      return (Number(b.followers) || 0) - (Number(a.followers) || 0);
+    // Upsert account summary
+    upsertAccount(db, {
+      id:             summary.id,
+      person:         args.person || '',
+      name:           summary.name,
+      platform:       summary.platform,
+      followers:      summary.followers,
+      video_count:    summary.videoCount,
+      total_likes:    summary.totalLikes,
+      total_comments: summary.totalComments,
+      url:            summary.url,
+      fetched_at:     summary.fetchedAt,
     });
-    
-    const newSummaryWs = XLSX.utils.json_to_sheet(summaryData);
-    if (wb.SheetNames.includes(summarySheetName)) wb.Sheets[summarySheetName] = newSummaryWs;
-    else XLSX.utils.book_append_sheet(wb, newSummaryWs, summarySheetName);
 
-    // Update Videos Sheet
-    let videoData = [];
-    if (wb.SheetNames.includes(videoSheetName)) {
-      videoData = XLSX.utils.sheet_to_json(wb.Sheets[videoSheetName]);
-    }
-    // Map new videos for merging
-    const newVideoRows = videos.map(v => ({
-      person: args.person || '',
+    // Upsert videos
+    const videoDbRows = videos.map(v => ({
+      id:           String(v.id),
+      account_id:   summary.id,
+      person:       args.person || '',
       account_name: summary.name,
-      account_id: summary.id,
-      id: String(v.id),
-      type: v.type,
-      title: String(v.title || '').slice(0, 32767), // Prevent Excel cell length overflow
-      url: v.url,
-      publishedAt: v.publishedAt,
-      duration: v.duration,
-      isTop: v.isTop ? 1 : 0,
-      likes: v.likes,
-      comments: v.comments,
-      shares: v.shares,
-      favorites: v.favorites,
-      tags: (v.tags || []).join(' '),
-      musicTitle: v.musicTitle || ''
+      type:         v.type,
+      title:        String(v.title || '').slice(0, 32767),
+      url:          v.url,
+      published_at: v.publishedAt,
+      duration:     v.duration,
+      is_top:       v.isTop ? 1 : 0,
+      likes:        v.likes,
+      comments:     v.comments,
+      shares:       v.shares,
+      favorites:    v.favorites,
+      tags:         (v.tags || []).join(' '),
+      music_title:  v.musicTitle || '',
     }));
+    upsertVideos(db, videoDbRows);
+    db.close();
 
-    // MERGE: Upsert videos to preserve historical un-scraped videos
-    const newVideosMap = new Map(newVideoRows.map(v => [String(v.id), v]));
-    for (let i = 0; i < videoData.length; i++) {
-        const existingId = String(videoData[i].id);
-        if (newVideosMap.has(existingId)) {
-            // Overwrite existing row with fresh metrics
-            videoData[i] = newVideosMap.get(existingId);
-            newVideosMap.delete(existingId);
-        }
-    }
-    // Push the remaining fully new videos
-    videoData.push(...newVideosMap.values());
-
-    // SORTING: globally sort by Person -> Account Name -> Published Date (Descending)
-    videoData.sort((a, b) => {
-        const pA = String(a.person || '');
-        const pB = String(b.person || '');
-        if (pA !== pB) return pA.localeCompare(pB);
-        
-        const cA = String(a.account_name || '');
-        const cB = String(b.account_name || '');
-        if (cA !== cB) return cA.localeCompare(cB);
-        
-        const dA = String(a.publishedAt || '');
-        const dB = String(b.publishedAt || '');
-        return dB.localeCompare(dA);
-    });
-
-    const newVideoWs = XLSX.utils.json_to_sheet(videoData);
-    if (wb.SheetNames.includes(videoSheetName)) wb.Sheets[videoSheetName] = newVideoWs;
-    else XLSX.utils.book_append_sheet(wb, newVideoWs, videoSheetName);
-
-    // ── Atomic Write with Retry Loop to fix EBUSY (Excel Locking) ──────────────
-    mkdirSync(join(__dirname, '..', 'outputs'), { recursive: true });
-    const tempPath = excelPath + '.tmp.xlsx';
-    
-    let saved = false;
-    let retries = 0;
-    while (!saved) {
-      try {
-        XLSX.writeFile(wb, tempPath);
-        if (existsSync(excelPath)) require('node:fs').renameSync(excelPath, excelPath + '.bak');
-        require('node:fs').renameSync(tempPath, excelPath);
-        if (existsSync(excelPath + '.bak')) {
-          try { require('node:fs').unlinkSync(excelPath + '.bak'); } catch(_) {}
-        }
-        saved = true;
-      } catch (writeErr) {
-        if (writeErr.code === 'EBUSY' || writeErr.message.includes('EBUSY') || writeErr.message.includes('busy') || writeErr.message.includes('locked')) {
-          console.warn(`\n[警告] Excel文件 'Douyin_All_Data.xlsx' 正在被其他程序(如Excel)占用！`);
-          console.warn(`[警告] 请立即关闭该 Excel 文件。系统将在 5 秒后自动重试保存...`);
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000); // sync sleep for 5 seconds
-          retries++;
-        } else {
-          try { require('node:fs').unlinkSync(tempPath); } catch(_) {}
-          throw new Error(`Excel 写入失败: ${writeErr.message}`);
-        }
-      }
-    }
+    console.log(`[DB] ✅ 数据已写入 SQLite：outputs/douyin.db`);
+    console.log(`[DB]    账号：${summary.name}  视频：${videoDbRows.length} 条`);
+    console.log(`[DB]  提示：如需导出 Excel 请运行 node scripts/export.mjs`);
 
     // Summary
     const typeCount = {};
     for (const v of videos) typeCount[v.type] = (typeCount[v.type] || 0) + 1;
     const typeStr = Object.entries(typeCount).map(([t, n]) => `${t}:${n}`).join('  ');
 
-    console.log('\n[douyin_skill v3.4] Done!');
+    console.log('\n[douyin_skill v3.5] Done!');
     console.log(`  Account : ${summary.name} (${summary.id})`);
     console.log(`  Followers: ${summary.followers.toLocaleString()}`);
     console.log(`  Posts   : ${videos.length} fetched (total: ${summary.videoCount})`);
     console.log(`  Types   : ${typeStr}`);
     console.log(`  Likes   : ${summary.totalLikes.toLocaleString()}`);
     console.log(`  Comments: ${summary.totalComments.toLocaleString()}`);
-    console.log(`  Output  : Excel 数据已成功追加到 outputs/Douyin_All_Data.xlsx`);
+    console.log(`  Output  : 数据已写入 outputs/douyin.db（SQLite）`);
 
     // Automatically generate/update dashboard
     try {

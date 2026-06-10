@@ -1,11 +1,13 @@
 ---
 name: douyin_skill
-description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Writes all data to a centralized Excel (outputs/Douyin_All_Data.xlsx) with two sheets (Summary / Videos), then auto-refreshes a three-tier dashboard (global / person / leader) under outputs/. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan. Use --person to tag the responsible team member for Excel-side attribution.
+description: Use when collecting Douyin (抖音) creator account metrics — profile info, follower counts, posts (video / image_text / live_replay / live) with likes/comments/shares/cover/tags/music. Writes all data to a centralized SQLite database (outputs/douyin.db), auto-refreshes a three-tier dashboard (global / person / leader) under outputs/, and supports on-demand Excel export. Pure browser-network interception, no a_bogus signing. Use --relogin to force a fresh QR scan. Use --person to tag the responsible team member.
 ---
 
-# Douyin Skill (v3.4)
+# Douyin Skill (v3.5)
 
-从抖音采集创作者账号数据——粉丝数、视频列表、点赞/评论/分享指标，**集中写入** `outputs/Douyin_All_Data.xlsx`，并**自动刷新三级监控看板**。
+从抖音采集创作者账号数据——粉丝数、视频列表、点赞/评论/分享指标，**集中写入 SQLite 数据库** `outputs/douyin.db`，并**自动刷新三级监控看板**。
+
+> **v3.5 新增**：使用 SQLite 替代 Excel 作为主数据存储，彻底解决 EBUSY 文件锁定问题；Excel 可随时按需导出。
 
 ## 安装依赖
 
@@ -209,9 +211,20 @@ MS4wLjABAAAA...
 
 7. **下次运行**：复用持久化配置文件，免扫码
 
-## 输出格式（v3.4：集中 Excel）
+## 输出格式（v3.5：SQLite + 按需 Excel 导出）
 
-所有数据写入 `outputs/Douyin_All_Data.xlsx`，包含两个 sheet。
+所有数据写入 `outputs/douyin.db`（SQLite），**彻底解决 Excel 文件锁定（EBUSY）问题**。
+
+```
+outputs/
+├── douyin.db                      # 主数据库（SQLite，自动创建）
+├── Douyin_All_Data.xlsx           # 按需导出（node scripts/export.mjs）
+├── dashboard.html                 # 全局总看板
+├── person_dashboards/<name>.html  # 个人看板
+└── leader_dashboards/<name>.html  # 组长看板
+```
+
+### accounts 表（每行一个账号）
 
 ### Summary sheet
 
@@ -255,13 +268,14 @@ MS4wLjABAAAA...
 | `tags` | 话题/标签名（空格分隔） |
 | `musicTitle` | 背景音乐标题 |
 
-### Excel 写入策略
+### 数据库写入策略
 
-- **upsert**：以 `id`（Summary） / `account_id+id`（Videos）为键更新已有行；新行追加到末尾
-- **全局排序**：Summary 按 person → followers desc；Videos 按 person → account_name → publishedAt desc
-- **原子重命名**：先写 `Douyin_All_Data.xlsx.tmp.xlsx` → 备份当前文件为 `.bak` → 原子 `rename`
-- **EBUSY 无限重试**：Excel 进程占用时每 5 秒提示一次"请关闭 Excel"，不放弃、不报错
-- **视频合并**（`2820f8f`）：再次采集时**不会**覆盖历史未抓到的视频行，只更新已有 `aweme_id` 的指标
+- **upsert**：`INSERT OR REPLACE`，以 `id`（accounts） / `(id, account_id)`（videos）为主键原子更新
+- **事务批写**：每次 upsert 多条视频用单个事务包裹，性能比 Excel 逐行写快 10x+
+- **无文件锁**：SQLite WAL 模式支持多读单写，不受 Office/WPS 进程干扰
+- **历史保留**：视频 `ON CONFLICT DO UPDATE` 只更新互动数据，不会丢失历史未抓到的视频行
+- **按需导出 Excel**：`node scripts/export.mjs` 从 SQLite 实时生成 Excel（保持 Summary/Videos 双 sheet 格式）
+- **一次性迁移**：`node scripts/migrate.mjs` 将旧版 `Douyin_All_Data.xlsx` 全量导入 SQLite
 
 ## 技术实现
 
@@ -270,8 +284,25 @@ MS4wLjABAAAA...
 - **数据滚动**：`page.mouse.wheel()` 模拟真人滚轮 + 失败回合的 jitter scroll（上滚回弹再下滚）触发懒加载
 - **登录持久化**：浏览器配置文件 + LocalStorage 特征自动保存，下次免扫码登录
 - **终止条件**：服务器 `has_more=false` / 达到 `--limit` / 连续 8 轮滚动无新响应
-- **看板渲染**：客户端从嵌入的 JSON 渲染（`d927e1d`），解决 base64 注入 mojibake 问题（`c1c6b77`）
-- **看板模板修复**：修正 HTML 生成中转义模板字面量导致的空看板问题（`092b7cf`）
+- **数据存储**：`better-sqlite3` 同步 API，WAL 模式，`INSERT OR REPLACE` 原子 upsert，事务批写，无 EBUSY 文件锁问题
+- **Excel 导出**：`scripts/export.mjs` 按需从 SQLite 导出，保持 Summary/Videos 双 sheet 向后兼容
+- **历史迁移**：`scripts/migrate.mjs` 一次性将旧版 Excel 全量导入 SQLite
+- **看板渲染**：客户端从嵌入的 JSON 渲染，优先读 SQLite，回退读 Excel（兼容旧版）
+
+## 数据库操作
+
+```bash
+# 查询数据库概况
+node -e "import('./scripts/db.mjs').then(({openDb,getAllAccounts})=>{const db=openDb();const rows=getAllAccounts(db);console.log(rows.length,'个账号');db.close()})"
+
+# 导出为 Excel
+node scripts/export.mjs
+node scripts/export.mjs --out ./backup.xlsx
+
+# 将旧版 Excel 历史数据迁移到 SQLite（只需运行一次）
+node scripts/migrate.mjs
+node scripts/migrate.mjs --excel ./outputs/Douyin_All_Data.xlsx
+```
 
 ## 斜杠命令（Claude Code）
 
@@ -340,9 +371,10 @@ node scripts/collect.mjs --account "新账号URL" --relogin
 
 确认本机已安装 Chrome（脚本配置 `channel: "chrome"`）。如果只有 Chromium：删除 `buildBrowserOptions()` 中 `channel: "chrome"` 一行，或安装 Chrome 浏览器。
 
-### 7. Excel 写入卡住"请关闭 Excel"
+### 7. Excel 写入卡住（旧版本问题）
 
-`Douyin_All_Data.xlsx` 正在被 Office 占用。脚本会**无限**重试（每 5 秒一次），关闭 Excel 后自动恢复。不想等可以 `Ctrl+C` 中断。
+**v3.5 已彻底修复**：数据现在写入 SQLite（`outputs/douyin.db`），不受 Office/WPS 进程影响。
+如需 Excel，采集完成后运行 `node scripts/export.mjs` 即可。
 
 ### 8. 看板缺"组长看板"
 
@@ -351,10 +383,6 @@ node scripts/collect.mjs --account "新账号URL" --relogin
 # 编辑 config/组织关系.txt（参考上方"团队配置"章节的格式）
 # 下一跑 dashboard.mjs 时会自动解析并生成 config/team.json
 ```
-
-### 9. 历史版本遗留工具 `organize_outputs.mjs`
-
-`scripts/organize_outputs.mjs` 在 v3.4 已**失效**——它依赖 `outputs/<昵称>/summary.json` 这种独立目录结构，但 v3.4 数据全部进 Excel。**不要再跑这个脚本**。
 
 ## 文件说明
 
@@ -376,18 +404,19 @@ douyin_skill/
 │       └── douyin_skill.md           # /douyin_skill 斜杠命令定义
 ├── private/profiles/douyin/          # 浏览器登录态（自动生成，git 忽略）
 ├── outputs/                          # 采集结果（自动生成，git 忽略）
-│   ├── Douyin_All_Data.xlsx          # 【主数据源】集中式 Excel
+│   ├── douyin.db                     # 【主数据源】SQLite 数据库（v3.5+）
+│   ├── Douyin_All_Data.xlsx          # 按需导出的 Excel（node scripts/export.mjs）
 │   ├── dashboard.html                # 全局看板
 │   ├── person_dashboards/            # 个人看板（按负责人）
 │   └── leader_dashboards/            # 组长看板（按 team.json 层级）
 ├── 账号监控_人员分组.xlsx             # 批采 / 看板用配置（gitignored）
 └── scripts/
-    ├── collect.mjs                   # v3.4 主入口（拦截器 + Excel 写入 + 自动 dashboard）
+    ├── collect.mjs                   # v3.5 主入口（拦截器 + SQLite 写入 + 自动 dashboard）
     ├── batch_collect.mjs             # Excel 批采入口
-    ├── dashboard.mjs                 # 三级看板生成器
-    ├── organize_outputs.mjs          # 【v3.4 失效】历史归位脚本，勿跑
-    ├── migrate_to_excel.mjs          # 历史数据一次性迁移到 Excel（可选）
-    ├── dashboard_backup.mjs          # dashboard.mjs 的历史备份
+    ├── dashboard.mjs                 # 三级看板生成器（优先读 SQLite，回退读 Excel）
+    ├── db.mjs                        # SQLite 数据访问层（better-sqlite3）
+    ├── export.mjs                    # 从 SQLite 按需导出 Excel
+    ├── migrate.mjs                   # 一次性将旧版 Excel 迁移到 SQLite
     └── adapters/
         ├── stealth.min.js            # 反检测注入脚本
         ├── douyin.mjs                # 旧版 HTTP 适配器（v2.x，已不被 collect.mjs 引用，保留供参考）
@@ -396,7 +425,8 @@ douyin_skill/
 
 ## 依赖
 
+- `better-sqlite3` (^11.0.0) — SQLite 数据库驱动（同步 API，无文件锁）
 - `playwright` (^1.60.0)
 - `playwright-extra` (^4.3.6)
 - `puppeteer-extra-plugin-stealth` (^2.11.2)
-- `xlsx` (^0.18.5)
+- `xlsx` (^0.18.5) — 仅用于 export.mjs 和 migrate.mjs

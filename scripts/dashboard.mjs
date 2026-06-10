@@ -13,6 +13,7 @@ import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { openDb, getAllAccountsWithVideos, DEFAULT_DB_PATH } from './db.mjs';
 
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
@@ -115,9 +116,65 @@ function htmlEscape(str) {
 
 function loadDatabaseData() {
   const summaryMap = new Map();
-  const videosMap = new Map();
+  const videosMap  = new Map();
+
+  // ── 优先读取 SQLite 数据库 ───────────────────────────────────────────────
+  if (existsSync(DEFAULT_DB_PATH)) {
+    try {
+      const db = openDb(DEFAULT_DB_PATH);
+      const { summaryMap: sm, videosMap: vm } = getAllAccountsWithVideos(db);
+      db.close();
+
+      // 将 SQLite snake_case 列名映射为 dashboard 期望的 camelCase 格式
+      for (const [id, entry] of sm) {
+        const a = entry.data;
+        summaryMap.set(id, {
+          data: {
+            person:        a.person,
+            id:            a.id,
+            name:          a.name,
+            platform:      a.platform,
+            followers:     a.followers,
+            videoCount:    a.video_count,
+            totalLikes:    a.total_likes,
+            totalComments: a.total_comments,
+            url:           a.url,
+            fetchedAt:     a.fetched_at,
+          }
+        });
+      }
+
+      // 将视频列名映射为 dashboard 期望的格式
+      for (const [accId, vids] of vm) {
+        videosMap.set(accId, vids.map(v => ({
+          person:       v.person,
+          account_name: v.account_name,
+          account_id:   v.account_id,
+          id:           v.id,
+          type:         v.type,
+          title:        v.title,
+          url:          v.url,
+          publishedAt:  v.published_at,
+          duration:     v.duration,
+          isTop:        v.is_top,
+          likes:        v.likes,
+          comments:     v.comments,
+          shares:       v.shares,
+          favorites:    v.favorites,
+          tags:         v.tags,
+          musicTitle:   v.music_title,
+        })));
+      }
+
+      console.log(`[Dashboard] ✅ 从 SQLite 加载数据：${summaryMap.size} 个账号`);
+      return { summaryMap, videosMap };
+    } catch (e) {
+      console.error(`[Dashboard] SQLite 读取失败，回退到 Excel：${e.message}`);
+    }
+  }
+
+  // ── 回退：读取旧版 Excel（兼容历史数据）─────────────────────────────────
   const dataDbPath = join(outputsDir, 'Douyin_All_Data.xlsx');
-  
   if (existsSync(dataDbPath)) {
     try {
       const dataWb = XLSX.readFile(dataDbPath);
@@ -135,12 +192,13 @@ function loadDatabaseData() {
           videosMap.get(accId).push(v);
         }
       }
-      console.log(`[Dashboard] 成功加载全局 Excel 数据：${summaryMap.size} 个账号`);
+      console.log(`[Dashboard] ⚠️  从 Excel 回退加载：${summaryMap.size} 个账号（建议运行 migrate.mjs 迁移到 SQLite）`);
     } catch (e) {
-      console.error(`[Dashboard] 读取 Excel 数据失败 (可能文件已损坏或被独占锁定): ${e.message}`);
+      console.error(`[Dashboard] 读取 Excel 数据失败: ${e.message}`);
     }
   } else {
-    console.warn(`[Dashboard] 警告：未找到 Douyin_All_Data.xlsx`);
+    console.warn(`[Dashboard] 警告：未找到数据源（SQLite 或 Excel）`);
+    console.warn(`[Dashboard] 请先运行 node scripts/collect.mjs 采集数据，或运行 node scripts/migrate.mjs 迁移历史数据。`);
   }
 
   return { summaryMap, videosMap };

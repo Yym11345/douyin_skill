@@ -1,7 +1,7 @@
 {
   "name": "douyin-skill",
-  "version": "3.4.0",
-  "description": "Douyin (抖音) creator account data collector — browser-native API interception, no signing required",
+  "version": "3.5.0",
+  "description": "Douyin (抖音) creator account data collector — browser-native API interception, SQLite storage, no signing required",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
@@ -10,10 +10,13 @@
     "collect": "node scripts/collect.mjs",
     "collect-all": "node scripts/batch_collect.mjs",
     "dashboard": "node scripts/dashboard.mjs",
+    "export": "node scripts/export.mjs",
+    "migrate": "node scripts/migrate.mjs",
     "setup": "npm install && npx playwright install chromium",
     "install-browser": "npx playwright install chromium"
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "playwright": "^1.60.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
