@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * scripts/miner.mjs
- * douyin_skill - 长尾词库挖掘工具 (Long-tail Keyword Miner)
+ * keyboards_skill - 长尾词库挖掘工具 (Long-tail Keyword Miner)
  * 
  * 自动拦截 Douyin Search Suggest API 并生成 A-Z 和 0-9 的长尾词。
  */
@@ -54,7 +54,7 @@ for (let i = 0; i <= 9; i++) {
 const suffixes = ['怎么', '推荐', '哪个好', '测评', '排行榜', '多少钱', '区别'];
 for (const suffix of suffixes) {
   queries.push(`${coreKeyword}${suffix}`);
-  queries.push(`${coreKeyword} ${suffix}`);
+  queries.push(`${coreKeyword} ${suffix}`); // Added spaced suffix
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -131,8 +131,8 @@ for (const suffix of suffixes) {
   });
 
   console.log('[Miner] 正在打开抖音首页...');
-  await page.goto('https://www.douyin.com/');
-  await page.waitForTimeout(5000);
+  await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(8000); // 增加等待时间以防出现 Please wait...
 
   // Try to find the search input field
   const searchSelectors = [
@@ -158,6 +158,15 @@ for (const suffix of suffixes) {
     console.error('[Miner] 📸 已保存错误截图到 miner_error.png');
     await context.close();
     process.exit(1);
+  }
+
+  console.log('[Miner] 准备就绪，正在检测搜索框是否可用 (若有登录弹窗，请在这 60 秒内手动关闭或扫码)...');
+  try {
+    // 尝试点击一下搜索框，如果被遮挡会等待，最多等 60 秒
+    await page.click(searchInput, { timeout: 60000 });
+    console.log('[Miner] 搜索框可用，开始批量探测！');
+  } catch (e) {
+    console.log('[Miner] ⚠️ 警告: 等待搜索框超时，页面可能被弹窗遮挡。尝试继续执行...');
   }
 
   // Iterate over all queries
@@ -211,13 +220,19 @@ for (const suffix of suffixes) {
 
   // 1. Export Excel (Only include records captured/updated in THIS session)
   const sessionData = allWordsForRoot.filter(k => k.captured_at >= sessionStartTime);
-  const keywordRows = sessionData.map(k => ({
-    '最高推荐排名': k.rank === 999 ? '-' : k.rank,
-    '核心大词':     k.root_keyword,
-    '长尾精准词':   k.suggestion,
-    '触发搜索词':   k.source_query,
-    '挖掘时间':     k.captured_at,
-  }));
+  const keywordRows = sessionData.map(k => {
+    const parts = k.source_query.split(' ');
+    const isTextSuffix = parts.length > 1 && parts[1].length > 1;
+    const displaySource = isTextSuffix ? k.source_query.replace(' ', '(带空格) ') : k.source_query;
+    return {
+      '最高推荐排名': k.rank === 999 ? '-' : k.rank,
+      '核心大词':     k.root_keyword,
+      '长尾精准词':   k.suggestion,
+      '触发搜索词':   displaySource,
+      '挖掘时间':     k.captured_at,
+    };
+  });
+  
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(keywordRows), 'Keywords');
   const excelPath = join(keywordDir, `${coreKeyword}_长尾词库.xlsx`);
@@ -235,7 +250,7 @@ for (const suffix of suffixes) {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>\${coreKeyword} - 长尾词挖掘报告</title>
+    <title>${coreKeyword} - 长尾词挖掘报告</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; padding: 20px; background-color: #f5f5f7; color: #333; }
         h1 { text-align: center; color: #1a1a1a; margin-bottom: 5px; }
@@ -335,10 +350,14 @@ for (const suffix of suffixes) {
     </div>
     
     <div class="grid-container">
-        ${Object.keys(groupedData).map(query => `
+        ${Object.keys(groupedData).map(query => {
+            const parts = query.split(' ');
+            const isTextSuffix = parts.length > 1 && parts[1].length > 1;
+            const displayQuery = isTextSuffix ? query.replace(' ', '<span style="background-color:#ffeaa7; padding:2px 4px; border-radius:4px; font-size:0.75em; margin:0 4px; color:#d35400;">带空格</span>') : query;
+            return `
         <div class="search-box">
             <div class="box-header">
-                <span>触发词：<span style="color:#0066cc;">${query}</span></span>
+                <span>触发词：<span style="color:#0066cc;">${displayQuery}</span></span>
                 <span class="count">${groupedData[query].length} 个</span>
             </div>
             <ul class="word-list">
@@ -350,7 +369,7 @@ for (const suffix of suffixes) {
                 `).join('')}
             </ul>
         </div>
-        `).join('')}
+        `}).join('')}
     </div>
 </body>
 </html>`;
