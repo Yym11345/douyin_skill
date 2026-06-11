@@ -87,10 +87,19 @@ node scripts/batch_collect.mjs
 
 会读取项目根目录的 `账号监控_人员分组.xlsx`（`按人分组` 工作表），**顺序**逐个 `execSync` 调用 `collect.mjs` 并自动传入 `--person` 负责人。**绝对不要并发**——会触发抖音风控和浏览器多开卡死。
 
-### 仅刷新看板
+### 挖掘长尾精准词库 (New)
+
+```bash
+node scripts/miner.mjs --keyword "发膜"
+```
+
+输入一个核心产品词（如“发膜”），自动在搜索框模拟输入 `发膜 a` 到 `发膜 z`、`发膜 0` 到 `发膜 9` 以及各种常用疑问后缀（如“怎么”、“推荐”），拦截官方下拉联想词 API，挖掘所有长尾词存入本地 SQLite。
+
+### 仅刷新看板或导出 Excel
 
 ```bash
 node scripts/dashboard.mjs
+node scripts/export.mjs
 ```
 
 适用：手工编辑过 `config/team.json`、或外部修改了 `Douyin_All_Data.xlsx` 后想重新生成页面。

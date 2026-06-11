@@ -14,7 +14,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { openDb, getAllAccounts, getAllVideos, DEFAULT_DB_PATH } from './db.mjs';
+import { openDb, getAllAccounts, getAllVideos, getAllKeywordSuggestions, DEFAULT_DB_PATH } from './db.mjs';
 
 const require = createRequire(import.meta.url);
 const XLSX    = require('xlsx');
@@ -45,9 +45,10 @@ const outPath = args.out || join(__dirname, '..', 'outputs', 'Douyin_All_Data.xl
   // ── Load data ──────────────────────────────────────────────────────────────
   const accounts = getAllAccounts(db);
   const videos   = getAllVideos(db);
+  const keywords = getAllKeywordSuggestions(db);
   db.close();
 
-  console.log(`[Export] 加载数据：${accounts.length} 个账号，${videos.length} 个视频`);
+  console.log(`[Export] 加载数据：${accounts.length} 个账号，${videos.length} 个视频，${keywords.length} 个长尾词`);
 
   // ── Build Summary sheet rows (column order matches legacy Excel) ───────────
   const summaryRows = accounts.map(a => ({
@@ -83,10 +84,21 @@ const outPath = args.out || join(__dirname, '..', 'outputs', 'Douyin_All_Data.xl
     musicTitle:   v.music_title,
   }));
 
+  // ── Build Keywords sheet rows ─────────────────────────────────────────────
+  const keywordRows = keywords.map(k => ({
+    '核心大词':     k.root_keyword,
+    '长尾精准词':   k.suggestion,
+    '触发搜索词':   k.source_query,
+    '挖掘时间':     k.captured_at,
+  }));
+
   // ── Write Excel ───────────────────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(videoRows),   'Videos');
+  if (keywordRows.length > 0) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(keywordRows), 'Keywords');
+  }
 
   // Ensure output dir exists
   const outDir = dirname(outPath);
@@ -94,5 +106,5 @@ const outPath = args.out || join(__dirname, '..', 'outputs', 'Douyin_All_Data.xl
 
   XLSX.writeFile(wb, outPath);
   console.log(`[Export] ✅ 已导出：${outPath}`);
-  console.log(`[Export]    Summary: ${summaryRows.length} 行  |  Videos: ${videoRows.length} 行`);
+  console.log(`[Export]    Summary: ${summaryRows.length} 行  |  Videos: ${videoRows.length} 行  |  Keywords: ${keywordRows.length} 行`);
 })();

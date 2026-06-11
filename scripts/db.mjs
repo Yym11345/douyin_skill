@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS videos (
 CREATE INDEX IF NOT EXISTS idx_videos_account  ON videos(account_id);
 CREATE INDEX IF NOT EXISTS idx_videos_person   ON videos(person);
 CREATE INDEX IF NOT EXISTS idx_accounts_person ON accounts(person);
+
+CREATE TABLE IF NOT EXISTS keyword_suggestions (
+  suggestion   TEXT,
+  root_keyword TEXT DEFAULT '',
+  source_query TEXT DEFAULT '',
+  captured_at  TEXT DEFAULT '',
+  rank         INTEGER DEFAULT 999,
+  PRIMARY KEY (root_keyword, source_query, suggestion)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyword_suggestions_root ON keyword_suggestions(root_keyword);
 `;
 
 // ── openDb ────────────────────────────────────────────────────────────────────
@@ -93,6 +104,19 @@ export function openDb(dbPath = DEFAULT_DB_PATH) {
 
   const db = new Database(dbPath);
   db.exec(DDL);
+  
+    // Schema migration for rank is no longer needed as we recreated the table.
+    // Try to restore old data if available
+    try {
+      db.exec(`
+        INSERT OR IGNORE INTO keyword_suggestions (suggestion, root_keyword, source_query, captured_at, rank)
+        SELECT suggestion, root_keyword, source_query, captured_at, rank FROM keyword_suggestions_old;
+      `);
+      db.exec("DROP TABLE keyword_suggestions_old;");
+    } catch (e) {
+      // Ignored
+    }
+  
   return db;
 }
 
@@ -259,6 +283,64 @@ export function getAllAccountsWithVideos(db) {
   }
 
   return { summaryMap, videosMap };
+}
+
+// ── Keyword Suggestions ────────────────────────────────────────────────────────
+
+/**
+ * 批量插入或更新长尾词（事务包裹）
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<{suggestion: string, root_keyword: string, source_query: string, captured_at: string}>} rows
+ */
+export function upsertKeywordSuggestions(db, rows) {
+  if (!rows || rows.length === 0) return;
+
+  const stmt = db.prepare(`
+    INSERT INTO keyword_suggestions
+      (suggestion, root_keyword, source_query, captured_at, rank)
+    VALUES
+      (@suggestion, @root_keyword, @source_query, @captured_at, @rank)
+    ON CONFLICT(root_keyword, source_query, suggestion) DO UPDATE SET
+      captured_at  = excluded.captured_at,
+      rank         = excluded.rank
+  `);
+
+  const insertMany = db.transaction((items) => {
+    for (const v of items) {
+      stmt.run({
+        suggestion:   String(v.suggestion || '').trim(),
+        root_keyword: String(v.root_keyword || '').trim(),
+        source_query: String(v.source_query || '').trim(),
+        captured_at:  String(v.captured_at || new Date().toISOString()),
+        rank:         Number(v.rank) || 999
+      });
+    }
+  });
+
+  insertMany(rows);
+}
+
+/**
+ * 返回所有抓取到的长尾词
+ * @param {import('better-sqlite3').Database} db
+ * @returns {Array<object>}
+ */
+export function getAllKeywordSuggestions(db) {
+  return db
+    .prepare('SELECT * FROM keyword_suggestions ORDER BY root_keyword ASC, source_query ASC, suggestion ASC')
+    .all();
+}
+
+/**
+ * 根据核心大词查询相关的所有长尾词
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} rootKeyword
+ * @returns {Array<object>}
+ */
+export function getKeywordSuggestionsByRoot(db, rootKeyword) {
+  return db
+    .prepare('SELECT * FROM keyword_suggestions WHERE root_keyword = ? ORDER BY source_query ASC, rank ASC')
+    .all(rootKeyword);
 }
 
 // ── Default DB path export (for other scripts) ────────────────────────────────
